@@ -1,0 +1,19 @@
+{
+  "version": 2,
+  "functions": {
+    "api/analyze.js": {
+      "memory": 1024,
+      "maxDuration": 60
+    }
+  },
+  "routes": [
+    {
+      "src": "/api/analyze",
+      "dest": "/api/analyze.js"
+    },
+    {
+      "src": "/(.*)",
+      "dest": "/public/$1"
+    }
+  ]
+}

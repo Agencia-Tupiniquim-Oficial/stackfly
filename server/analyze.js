@@ -1,6 +1,7 @@
 'use strict';
 
-const puppeteer = require('puppeteer');
+// Em produção serverless (Vercel) o caller passa `executablePath` e `puppeteerModule`
+// apontando para `puppeteer-core`. Em dev local usa `puppeteer` com Chromium embutido.
 
 // Lista de "caminhos" de variáveis globais de JS que vale a pena checar.
 // É construída dinamicamente a partir do dataset de tecnologias (ver server.js),
@@ -15,11 +16,15 @@ function collectJsPaths(technologies) {
   return Array.from(paths);
 }
 
-async function fetchPageData(url, technologies) {
-  const browser = await puppeteer.launch({
+async function fetchPageData(url, technologies, { executablePath, puppeteerModule } = {}) {
+  const pptr = puppeteerModule || require('puppeteer');
+  const launchOptions = {
     headless: true,
-    args: ['--no-sandbox', '--disable-setuid-sandbox'],
-  });
+    args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
+  };
+  if (executablePath) launchOptions.executablePath = executablePath;
+  else if (process.env.CHROME_BIN) launchOptions.executablePath = process.env.CHROME_BIN;
+  const browser = await pptr.launch(launchOptions);
 
   try {
     const page = await browser.newPage();
