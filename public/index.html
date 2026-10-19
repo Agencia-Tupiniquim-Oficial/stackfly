@@ -354,12 +354,15 @@
   const resultsEl = document.getElementById('results');
   const featureGridEl = document.getElementById('featureGrid');
   const submitBtn = document.getElementById('submitBtn');
+  // Cole aqui a URL gerada pelo Railway (ex: https://seu-projeto.up.railway.app)
+  const RAILWAY_API_URL = ''; 
 
-  const CATEGORY_ORDER = [
-    'CMS', 'Ecommerce', 'JavaScript frameworks', 'JavaScript libraries',
-    'Web servers', 'Analytics', 'CDN', 'Programming languages',
-  ];
-
+  function getApiEndpoint() {
+    if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+      return '/api/analyze';
+    }
+    return (RAILWAY_API_URL ? RAILWAY_API_URL.replace(/\/$/, '') : '') + '/api/analyze';
+  }
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     const url = urlInput.value.trim();
@@ -372,7 +375,8 @@
     featureGridEl.style.display = 'none';
 
     try {
-      const res = await fetch('/api/analyze', {
+      const endpoint = getApiEndpoint();
+      const res = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url }),

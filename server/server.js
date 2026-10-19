@@ -26,6 +26,7 @@ const categories = JSON.parse(
 
 const resultCache = new TtlCache(CACHE_TTL_MS);
 
+app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, '..', 'public')));
 
