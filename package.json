@@ -1,0 +1,17 @@
+{
+  "name": "stackfly",
+  "version": "1.0.0",
+  "description": "Stackfly — diagnóstico e API pública de stack de tecnologia de sites (estilo Wappalyzer)",
+  "main": "server/server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server/server.js",
+    "dev": "node --watch server/server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.19.2",
+    "express-rate-limit": "^7.4.0",
+    "puppeteer": "^23.0.0"
+  }
+}
