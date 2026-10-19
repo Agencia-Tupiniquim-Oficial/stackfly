@@ -2,8 +2,6 @@
 
 const path = require('path');
 const fs = require('fs');
-const chromium = require('@sparticuz/chromium');
-const puppeteerCore = require('puppeteer-core');
 const { fetchPageData } = require('../server/analyze');
 const { detectTechnologies } = require('../server/matcher');
 
@@ -33,14 +31,7 @@ module.exports = async function handler(req, res) {
   const targetUrl = normalizeUrl(url);
 
   try {
-    const executablePath = await chromium.executablePath();
-
-    const pageData = await fetchPageData(targetUrl, technologies, {
-      executablePath,
-      puppeteerModule: puppeteerCore,
-      launchArgs: chromium.args,
-    });
-
+    const pageData = await fetchPageData(targetUrl, technologies);
     const detections = detectTechnologies(technologies, pageData);
 
     const grouped = {};

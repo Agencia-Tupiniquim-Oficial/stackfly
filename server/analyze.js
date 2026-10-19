@@ -1,103 +1,85 @@
 'use strict';
 
-// Em produção serverless (Vercel) o caller passa `executablePath` e `puppeteerModule`
-// apontando para `puppeteer-core`. Em dev local usa `puppeteer` com Chromium embutido.
-
-// Lista de "caminhos" de variáveis globais de JS que vale a pena checar.
-// É construída dinamicamente a partir do dataset de tecnologias (ver server.js),
-// então não precisamos manter essa lista manualmente.
+// Análise baseada em fetch nativo (Node 18+) — 100% compatível com Vercel (sem Puppeteer/Chromium)
 function collectJsPaths(technologies) {
-  const paths = new Set();
-  for (const tech of Object.values(technologies)) {
-    if (tech.js && typeof tech.js === 'object') {
-      for (const key of Object.keys(tech.js)) paths.add(key);
-    }
-  }
-  return Array.from(paths);
+  return [];
 }
 
-async function fetchPageData(url, technologies, { executablePath, puppeteerModule, launchArgs } = {}) {
-  const pptr = puppeteerModule || require('puppeteer');
-  const launchOptions = {
-    headless: true,
-    args: launchArgs || ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
-  };
-  if (executablePath) launchOptions.executablePath = executablePath;
-  else if (process.env.CHROME_BIN) launchOptions.executablePath = process.env.CHROME_BIN;
-  const browser = await pptr.launch(launchOptions);
+async function fetchPageData(url, technologies) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 15000);
 
   try {
-    const page = await browser.newPage();
-    await page.setUserAgent(
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36'
-    );
-
-    let mainResponseHeaders = {};
-    page.on('response', (response) => {
-      // Guarda os headers apenas da resposta principal (documento raiz)
-      if (response.url() === url || response.request().resourceType() === 'document') {
-        if (Object.keys(mainResponseHeaders).length === 0) {
-          mainResponseHeaders = response.headers();
-        }
-      }
+    const res = await fetch(url, {
+      signal: controller.signal,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.5',
+      },
+      redirect: 'follow',
     });
 
-    const response = await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
-    if (response) {
-      mainResponseHeaders = { ...response.headers(), ...mainResponseHeaders };
-    }
+    clearTimeout(timeoutId);
 
-    const html = await page.content();
-
-    const scriptSrcs = await page.evaluate(() =>
-      Array.from(document.querySelectorAll('script[src]')).map((s) => s.src)
-    );
-
-    const metaTags = await page.evaluate(() => {
-      const result = {};
-      document.querySelectorAll('meta[name], meta[property]').forEach((m) => {
-        const key = (m.getAttribute('name') || m.getAttribute('property') || '').toLowerCase();
-        if (key) result[key] = m.getAttribute('content') || '';
-      });
-      return result;
-    });
-
-    const cookies = await page.cookies();
-    const cookieMap = {};
-    cookies.forEach((c) => {
-      cookieMap[c.name.toLowerCase()] = c.value;
-    });
-
-    // Checa a presença de variáveis globais conhecidas (window.wp, window.React etc.)
-    const jsPaths = collectJsPaths(technologies);
-    const jsGlobals = await page.evaluate((paths) => {
-      const found = {};
-      for (const path of paths) {
-        try {
-          const value = path.split('.').reduce((obj, key) => (obj == null ? undefined : obj[key]), window);
-          if (value !== undefined) found[path] = String(value).slice(0, 200);
-        } catch (e) {
-          // ignora paths que geram erro de acesso
-        }
-      }
-      return found;
-    }, jsPaths);
+    const finalUrl = res.url;
+    const html = await res.text();
 
     const headersLower = {};
-    for (const [k, v] of Object.entries(mainResponseHeaders)) headersLower[k.toLowerCase()] = v;
+    res.headers.forEach((val, key) => {
+      headersLower[key.toLowerCase()] = val;
+    });
+
+    // Extrai cookies do header Set-Cookie
+    const cookieMap = {};
+    const setCookie = res.headers.get('set-cookie');
+    if (setCookie) {
+      // Simples parser para cookies do header
+      const parts = setCookie.split(/,(?=\s*[a-zA-Z0-9_\-]+=)/);
+      for (const part of parts) {
+        const firstPair = part.split(';')[0];
+        const eqIdx = firstPair.indexOf('=');
+        if (eqIdx > 0) {
+          const name = firstPair.slice(0, eqIdx).trim().toLowerCase();
+          const val = firstPair.slice(eqIdx + 1).trim();
+          cookieMap[name] = val;
+        }
+      }
+    }
+
+    // Extrai meta tags via regex simples do HTML
+    const metaTags = {};
+    const metaRegex = /<meta\s+([^>]+)>/gi;
+    let match;
+    while ((match = metaRegex.exec(html)) !== null) {
+      const attrStr = match[1];
+      const nameMatch = attrStr.match(/(?:name|property)\s*=\s*["']([^"']+)["']/i);
+      const contentMatch = attrStr.match(/content\s*=\s*["']([^"']*)["']/i);
+      if (nameMatch && contentMatch) {
+        metaTags[nameMatch[1].toLowerCase()] = contentMatch[1];
+      }
+    }
+
+    // Extrai script src via regex
+    const scriptSrcs = [];
+    const scriptRegex = /<script[^>]+src\s*=\s*["']([^"']+)["']/gi;
+    while ((match = scriptRegex.exec(html)) !== null) {
+      scriptSrcs.push(match[1]);
+    }
 
     return {
       html,
       headersLower,
       meta: metaTags,
       cookies: cookieMap,
-      jsGlobals,
+      jsGlobals: {},
       scriptSrc: scriptSrcs,
       scriptSrcJoined: scriptSrcs.join('\n'),
-      finalUrl: page.url(),
+      finalUrl,
     };
-  } finally {
-    await browser.close();
+  } catch (err) {
+    clearTimeout(timeoutId);
+    throw new Error(`Falha ao carregar URL (${err.message})`);
   }
 }
 
