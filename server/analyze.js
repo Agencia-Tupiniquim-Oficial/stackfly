@@ -16,11 +16,11 @@ function collectJsPaths(technologies) {
   return Array.from(paths);
 }
 
-async function fetchPageData(url, technologies, { executablePath, puppeteerModule } = {}) {
+async function fetchPageData(url, technologies, { executablePath, puppeteerModule, launchArgs } = {}) {
   const pptr = puppeteerModule || require('puppeteer');
   const launchOptions = {
     headless: true,
-    args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
+    args: launchArgs || ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
   };
   if (executablePath) launchOptions.executablePath = executablePath;
   else if (process.env.CHROME_BIN) launchOptions.executablePath = process.env.CHROME_BIN;

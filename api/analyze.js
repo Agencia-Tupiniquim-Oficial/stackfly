@@ -38,6 +38,7 @@ module.exports = async function handler(req, res) {
     const pageData = await fetchPageData(targetUrl, technologies, {
       executablePath,
       puppeteerModule: puppeteerCore,
+      launchArgs: chromium.args,
     });
 
     const detections = detectTechnologies(technologies, pageData);
