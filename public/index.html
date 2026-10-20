@@ -494,10 +494,11 @@
         ) {
           return "/api/analyze";
         }
-        return (
-          (RAILWAY_API_URL ? RAILWAY_API_URL.replace(/\/$/, "") : "") +
-          "/api/analyze"
-        );
+        let base = RAILWAY_API_URL.trim();
+        if (base && !/^https?:\/\//i.test(base)) {
+          base = "https://" + base;
+        }
+        return base.replace(/\/$/, "") + "/api/analyze";
       }
       form.addEventListener("submit", async (e) => {
         e.preventDefault();
