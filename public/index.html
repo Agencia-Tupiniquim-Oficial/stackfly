@@ -1,490 +1,628 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="pt-BR">
-<head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Stackfly — Diagnóstico de Stack</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Manrope:wght@400;500;700;800&display=swap" rel="stylesheet">
-<style>
-  :root {
-    --bg: #0d1117;
-    --bg-radial: #0f1e17;
-    --panel: #161d27;
-    --panel-border: #1f2d22;
-    --text: #f0f4f0;
-    --muted: #7a8f82;
-    --accent: #1ed97a;
-    --accent-hover: #25f08a;
-    --accent-dim: rgba(30, 217, 122, 0.12);
-    --accent-glow: rgba(30, 217, 122, 0.06);
-    --error: #e05c5c;
-    --mono: 'JetBrains Mono', ui-monospace, monospace;
-    --sans: 'Manrope', system-ui, sans-serif;
-    --radius: 12px;
-  }
-
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-
-  body {
-    background: var(--bg);
-    background-image: radial-gradient(ellipse 70% 50% at 50% -10%, var(--bg-radial), transparent);
-    color: var(--text);
-    font-family: var(--sans);
-    min-height: 100vh;
-  }
-
-  /* grid sutil com tom verde */
-  .scan-grid {
-    position: fixed;
-    inset: 0;
-    background-image:
-      linear-gradient(rgba(30,217,122,0.03) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(30,217,122,0.03) 1px, transparent 1px);
-    background-size: 40px 40px;
-    pointer-events: none;
-    z-index: 0;
-  }
-
-  .wrap {
-    position: relative;
-    z-index: 1;
-    max-width: 760px;
-    margin: 0 auto;
-    padding: 72px 24px 100px;
-  }
-
-  /* ── Header ── */
-  header {
-    text-align: center;
-    margin-bottom: 48px;
-  }
-
-  .logo {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 52px;
-    height: 52px;
-    background: var(--accent-dim);
-    border: 1px solid rgba(30,217,122,0.25);
-    border-radius: 14px;
-    margin-bottom: 28px;
-  }
-
-  .logo svg { width: 26px; height: 26px; }
-
-  h1 {
-    font-size: clamp(28px, 5vw, 42px);
-    font-weight: 800;
-    line-height: 1.12;
-    letter-spacing: -0.02em;
-    margin-bottom: 14px;
-    color: #ffffff;
-  }
-
-  h1 .green { color: var(--accent); }
-
-  .sub {
-    color: var(--muted);
-    font-size: 15px;
-    line-height: 1.6;
-    max-width: 54ch;
-    margin: 0 auto;
-  }
-
-  /* ── Form ── */
-  form {
-    display: flex;
-    gap: 0;
-    margin: 36px auto 0;
-    max-width: 680px;
-    background: var(--panel);
-    border: 1px solid var(--panel-border);
-    border-radius: var(--radius);
-    overflow: hidden;
-    transition: border-color 0.2s;
-  }
-
-  form:focus-within {
-    border-color: rgba(30,217,122,0.35);
-    box-shadow: 0 0 0 3px var(--accent-glow);
-  }
-
-  .input-icon {
-    display: flex;
-    align-items: center;
-    padding: 0 14px;
-    color: var(--muted);
-    flex-shrink: 0;
-  }
-
-  input[type="text"] {
-    flex: 1;
-    background: transparent;
-    border: none;
-    padding: 16px 12px 16px 0;
-    color: var(--text);
-    font-family: var(--mono);
-    font-size: 14px;
-    outline: none;
-    min-width: 0;
-  }
-
-  input[type="text"]::placeholder { color: #3e5048; }
-
-  button {
-    background: var(--accent);
-    color: #081a0f;
-    border: none;
-    padding: 0 24px;
-    font-family: var(--sans);
-    font-weight: 700;
-    font-size: 14px;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    white-space: nowrap;
-    transition: background 0.15s;
-    flex-shrink: 0;
-  }
-
-  button:hover { background: var(--accent-hover); }
-  button:disabled { opacity: 0.5; cursor: progress; }
-
-  /* ── Status ── */
-  .status {
-    font-family: var(--mono);
-    font-size: 13px;
-    color: var(--muted);
-    margin-top: 20px;
-    min-height: 18px;
-    text-align: center;
-  }
-
-  .status.error { color: var(--error); }
-
-  /* ── Feature cards (estado inicial) ── */
-  .feature-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-    gap: 14px;
-    margin-top: 48px;
-  }
-
-  .feature-card {
-    background: var(--panel);
-    border: 1px solid var(--panel-border);
-    border-radius: var(--radius);
-    padding: 24px 20px;
-  }
-
-  .feature-icon {
-    width: 36px;
-    height: 36px;
-    background: var(--accent-dim);
-    border-radius: 8px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: var(--accent);
-    margin-bottom: 16px;
-  }
-
-  .feature-title {
-    font-weight: 700;
-    font-size: 15px;
-    margin-bottom: 6px;
-    color: var(--text);
-  }
-
-  .feature-desc {
-    font-size: 13.5px;
-    color: var(--muted);
-    line-height: 1.5;
-  }
-
-  /* ── Results ── */
-  .results { margin-top: 40px; }
-
-  .result-meta {
-    font-family: var(--mono);
-    font-size: 12.5px;
-    color: var(--muted);
-    padding-bottom: 18px;
-    border-bottom: 1px solid var(--panel-border);
-    margin-bottom: 28px;
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    flex-wrap: wrap;
-  }
-
-  .result-meta .badge {
-    background: var(--accent-dim);
-    color: var(--accent);
-    border-radius: 100px;
-    padding: 2px 10px;
-    font-size: 11.5px;
-  }
-
-  .category { margin-bottom: 28px; }
-
-  .category-name {
-    font-family: var(--mono);
-    font-size: 11.5px;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    color: var(--accent);
-    margin-bottom: 10px;
-  }
-
-  .tech-list {
-    display: flex;
-    flex-direction: column;
-    gap: 1px;
-    border-radius: var(--radius);
-    overflow: hidden;
-    border: 1px solid var(--panel-border);
-  }
-
-  .tech-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    background: var(--panel);
-    padding: 13px 16px;
-    transition: background 0.1s;
-  }
-
-  .tech-row:hover { background: #1a2430; }
-
-  .tech-name-wrap {
-    display: flex;
-    align-items: baseline;
-    gap: 8px;
-    min-width: 0;
-  }
-
-  .tech-name { font-weight: 600; font-size: 14.5px; }
-
-  .tech-version {
-    font-family: var(--mono);
-    font-size: 11.5px;
-    color: var(--accent);
-    background: var(--accent-dim);
-    padding: 1px 8px;
-    border-radius: 100px;
-    flex-shrink: 0;
-  }
-
-  .tech-confidence {
-    font-family: var(--mono);
-    font-size: 11.5px;
-    color: var(--muted);
-    flex-shrink: 0;
-  }
-
-  .implied-tag {
-    font-size: 10.5px;
-    color: var(--muted);
-    font-family: var(--mono);
-  }
-</style>
-</head>
-<body>
-  <div class="scan-grid"></div>
-  <div class="wrap">
-    <header>
-      <div class="logo">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--accent)">
-          <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
-        </svg>
-      </div>
-      <h1>Stack <span class="green">Detective</span></h1>
-      <p class="sub">Cole uma URL e a ferramenta varre headers, HTML, cookies e variáveis JS para identificar CMS, frameworks, analytics, CDN e outras tecnologias.</p>
-    </header>
-
-    <form id="form">
-      <span class="input-icon">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
-      </span>
-      <input type="text" id="url" name="url" placeholder="exemplo.com.br" autocomplete="off" />
-      <button type="submit" id="submitBtn">
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-        Analisar
-      </button>
-    </form>
-
-    <div class="status" id="status"></div>
-
-    <div class="results" id="results"></div>
-
-    <div class="feature-grid" id="featureGrid">
-      <div class="feature-card">
-        <div class="feature-icon">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
-        </div>
-        <div class="feature-title">Fingerprints Wappalyzer</div>
-        <div class="feature-desc">Base de dados open-source com centenas de tecnologias reconhecidas por padrão.</div>
-      </div>
-      <div class="feature-card">
-        <div class="feature-icon">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
-        </div>
-        <div class="feature-title">6 canais de detecção</div>
-        <div class="feature-desc">Headers HTTP, HTML, meta tags, cookies, JS globals e URLs de scripts.</div>
-      </div>
-      <div class="feature-card">
-        <div class="feature-icon">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/></svg>
-        </div>
-        <div class="feature-title">API pública</div>
-        <div class="feature-desc">Acesse via <code style="color:var(--accent);font-size:12px">GET /api/v1/stack</code> sem cadastro ou chave de API.</div>
-      </div>
-    </div>
-  </div>
-
-<script>
-  const form = document.getElementById('form');
-  const urlInput = document.getElementById('url');
-  const statusEl = document.getElementById('status');
-  const resultsEl = document.getElementById('results');
-  const featureGridEl = document.getElementById('featureGrid');
-  const submitBtn = document.getElementById('submitBtn');
-  // Cole aqui a URL gerada pelo Railway (ex: https://seu-projeto.up.railway.app)
-  const RAILWAY_API_URL = ''; 
-
-  function getApiEndpoint() {
-    if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
-      return '/api/analyze';
-    }
-    return (RAILWAY_API_URL ? RAILWAY_API_URL.replace(/\/$/, '') : '') + '/api/analyze';
-  }
-  form.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const url = urlInput.value.trim();
-    if (!url) return;
-
-    submitBtn.disabled = true;
-    statusEl.className = 'status';
-    statusEl.textContent = 'Varrendo fingerprints...';
-    resultsEl.innerHTML = '';
-    featureGridEl.style.display = 'none';
-
-    try {
-      const endpoint = getApiEndpoint();
-      const res = await fetch(endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url }),
-      });
-      const data = await res.json();
-
-      if (!res.ok) {
-        statusEl.className = 'status error';
-        statusEl.textContent = data.error || 'Não foi possível analisar esse site.';
-        return;
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Stackfly — Diagnóstico de Stack</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link
+      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Manrope:wght@400;500;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        --bg: #0d1117;
+        --bg-radial: #0f1e17;
+        --panel: #161d27;
+        --panel-border: #1f2d22;
+        --text: #f0f4f0;
+        --muted: #7a8f82;
+        --accent: #1ed97a;
+        --accent-hover: #25f08a;
+        --accent-dim: rgba(30, 217, 122, 0.12);
+        --accent-glow: rgba(30, 217, 122, 0.06);
+        --error: #e05c5c;
+        --mono: "JetBrains Mono", ui-monospace, monospace;
+        --sans: "Manrope", system-ui, sans-serif;
+        --radius: 12px;
       }
 
-      statusEl.textContent = '';
-      renderResults(data);
-    } catch (err) {
-      statusEl.className = 'status error';
-      statusEl.textContent = 'Erro de conexão com o servidor de análise.';
-    } finally {
-      submitBtn.disabled = false;
-    }
-  });
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
 
-  function renderResults(data) {
-    resultsEl.innerHTML = '';
+      body {
+        background: var(--bg);
+        background-image: radial-gradient(
+          ellipse 70% 50% at 50% -10%,
+          var(--bg-radial),
+          transparent
+        );
+        color: var(--text);
+        font-family: var(--sans);
+        min-height: 100vh;
+      }
 
-    const meta = document.createElement('div');
-    meta.className = 'result-meta';
-    const urlSpan = document.createElement('span');
-    urlSpan.textContent = data.finalUrl;
-    const badge = document.createElement('span');
-    badge.className = 'badge';
-    badge.textContent = `${data.count} tecnologia${data.count !== 1 ? 's' : ''} detectada${data.count !== 1 ? 's' : ''}`;
-    meta.appendChild(urlSpan);
-    meta.appendChild(badge);
-    resultsEl.appendChild(meta);
+      /* grid sutil com tom verde */
+      .scan-grid {
+        position: fixed;
+        inset: 0;
+        background-image:
+          linear-gradient(rgba(30, 217, 122, 0.03) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(30, 217, 122, 0.03) 1px, transparent 1px);
+        background-size: 40px 40px;
+        pointer-events: none;
+        z-index: 0;
+      }
 
-    if (data.count === 0) {
-      const p = document.createElement('div');
-      p.className = 'status';
-      p.textContent = 'Nenhuma tecnologia reconhecida no fingerprint atual.';
-      resultsEl.appendChild(p);
-      return;
-    }
+      .wrap {
+        position: relative;
+        z-index: 1;
+        max-width: 760px;
+        margin: 0 auto;
+        padding: 72px 24px 100px;
+      }
 
-    const categoryNames = Object.keys(data.grouped).sort((a, b) => {
-      const ai = CATEGORY_ORDER.indexOf(a);
-      const bi = CATEGORY_ORDER.indexOf(b);
-      if (ai === -1 && bi === -1) return a.localeCompare(b);
-      if (ai === -1) return 1;
-      if (bi === -1) return -1;
-      return ai - bi;
-    });
+      /* ── Header ── */
+      header {
+        text-align: center;
+        margin-bottom: 48px;
+      }
 
-    for (const catName of categoryNames) {
-      const techs = data.grouped[catName];
-      const block = document.createElement('div');
-      block.className = 'category';
+      .logo {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 52px;
+        height: 52px;
+        background: var(--accent-dim);
+        border: 1px solid rgba(30, 217, 122, 0.25);
+        border-radius: 14px;
+        margin-bottom: 28px;
+      }
 
-      const title = document.createElement('div');
-      title.className = 'category-name';
-      title.textContent = catName;
-      block.appendChild(title);
+      .logo svg {
+        width: 26px;
+        height: 26px;
+      }
 
-      const list = document.createElement('div');
-      list.className = 'tech-list';
+      h1 {
+        font-size: clamp(28px, 5vw, 42px);
+        font-weight: 800;
+        line-height: 1.12;
+        letter-spacing: -0.02em;
+        margin-bottom: 14px;
+        color: #ffffff;
+      }
 
-      techs
-        .sort((a, b) => b.confidence - a.confidence)
-        .forEach((t) => {
-          const row = document.createElement('div');
-          row.className = 'tech-row';
+      h1 .green {
+        color: var(--accent);
+      }
 
-          const left = document.createElement('div');
-          left.className = 'tech-name-wrap';
+      .sub {
+        color: var(--muted);
+        font-size: 15px;
+        line-height: 1.6;
+        max-width: 54ch;
+        margin: 0 auto;
+      }
 
-          const name = document.createElement('span');
-          name.className = 'tech-name';
-          name.textContent = t.name;
-          left.appendChild(name);
+      /* ── Form ── */
+      form {
+        display: flex;
+        gap: 0;
+        margin: 36px auto 0;
+        max-width: 680px;
+        background: var(--panel);
+        border: 1px solid var(--panel-border);
+        border-radius: var(--radius);
+        overflow: hidden;
+        transition: border-color 0.2s;
+      }
 
-          if (t.version) {
-            const ver = document.createElement('span');
-            ver.className = 'tech-version';
-            ver.textContent = `v${t.version}`;
-            left.appendChild(ver);
+      form:focus-within {
+        border-color: rgba(30, 217, 122, 0.35);
+        box-shadow: 0 0 0 3px var(--accent-glow);
+      }
+
+      .input-icon {
+        display: flex;
+        align-items: center;
+        padding: 0 14px;
+        color: var(--muted);
+        flex-shrink: 0;
+      }
+
+      input[type="text"] {
+        flex: 1;
+        background: transparent;
+        border: none;
+        padding: 16px 12px 16px 0;
+        color: var(--text);
+        font-family: var(--mono);
+        font-size: 14px;
+        outline: none;
+        min-width: 0;
+      }
+
+      input[type="text"]::placeholder {
+        color: #3e5048;
+      }
+
+      button {
+        background: var(--accent);
+        color: #081a0f;
+        border: none;
+        padding: 0 24px;
+        font-family: var(--sans);
+        font-weight: 700;
+        font-size: 14px;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        white-space: nowrap;
+        transition: background 0.15s;
+        flex-shrink: 0;
+      }
+
+      button:hover {
+        background: var(--accent-hover);
+      }
+      button:disabled {
+        opacity: 0.5;
+        cursor: progress;
+      }
+
+      /* ── Status ── */
+      .status {
+        font-family: var(--mono);
+        font-size: 13px;
+        color: var(--muted);
+        margin-top: 20px;
+        min-height: 18px;
+        text-align: center;
+      }
+
+      .status.error {
+        color: var(--error);
+      }
+
+      /* ── Feature cards (estado inicial) ── */
+      .feature-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        gap: 14px;
+        margin-top: 48px;
+      }
+
+      .feature-card {
+        background: var(--panel);
+        border: 1px solid var(--panel-border);
+        border-radius: var(--radius);
+        padding: 24px 20px;
+      }
+
+      .feature-icon {
+        width: 36px;
+        height: 36px;
+        background: var(--accent-dim);
+        border-radius: 8px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: var(--accent);
+        margin-bottom: 16px;
+      }
+
+      .feature-title {
+        font-weight: 700;
+        font-size: 15px;
+        margin-bottom: 6px;
+        color: var(--text);
+      }
+
+      .feature-desc {
+        font-size: 13.5px;
+        color: var(--muted);
+        line-height: 1.5;
+      }
+
+      /* ── Results ── */
+      .results {
+        margin-top: 40px;
+      }
+
+      .result-meta {
+        font-family: var(--mono);
+        font-size: 12.5px;
+        color: var(--muted);
+        padding-bottom: 18px;
+        border-bottom: 1px solid var(--panel-border);
+        margin-bottom: 28px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+
+      .result-meta .badge {
+        background: var(--accent-dim);
+        color: var(--accent);
+        border-radius: 100px;
+        padding: 2px 10px;
+        font-size: 11.5px;
+      }
+
+      .category {
+        margin-bottom: 28px;
+      }
+
+      .category-name {
+        font-family: var(--mono);
+        font-size: 11.5px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--accent);
+        margin-bottom: 10px;
+      }
+
+      .tech-list {
+        display: flex;
+        flex-direction: column;
+        gap: 1px;
+        border-radius: var(--radius);
+        overflow: hidden;
+        border: 1px solid var(--panel-border);
+      }
+
+      .tech-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        background: var(--panel);
+        padding: 13px 16px;
+        transition: background 0.1s;
+      }
+
+      .tech-row:hover {
+        background: #1a2430;
+      }
+
+      .tech-name-wrap {
+        display: flex;
+        align-items: baseline;
+        gap: 8px;
+        min-width: 0;
+      }
+
+      .tech-name {
+        font-weight: 600;
+        font-size: 14.5px;
+      }
+
+      .tech-version {
+        font-family: var(--mono);
+        font-size: 11.5px;
+        color: var(--accent);
+        background: var(--accent-dim);
+        padding: 1px 8px;
+        border-radius: 100px;
+        flex-shrink: 0;
+      }
+
+      .tech-confidence {
+        font-family: var(--mono);
+        font-size: 11.5px;
+        color: var(--muted);
+        flex-shrink: 0;
+      }
+
+      .implied-tag {
+        font-size: 10.5px;
+        color: var(--muted);
+        font-family: var(--mono);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="scan-grid"></div>
+    <div class="wrap">
+      <header>
+        <div class="logo">
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            style="color: var(--accent)"
+          >
+            <circle cx="12" cy="12" r="10" />
+            <polyline points="12 6 12 12 16 14" />
+          </svg>
+        </div>
+        <h1>Stack <span class="green">Detective</span></h1>
+        <p class="sub">
+          Cole uma URL e a ferramenta varre headers, HTML, cookies e variáveis
+          JS para identificar CMS, frameworks, analytics, CDN e outras
+          tecnologias.
+        </p>
+      </header>
+
+      <form id="form">
+        <span class="input-icon">
+          <svg
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <circle cx="12" cy="12" r="10" />
+            <line x1="2" y1="12" x2="22" y2="12" />
+            <path
+              d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"
+            />
+          </svg>
+        </span>
+        <input
+          type="text"
+          id="url"
+          name="url"
+          placeholder="exemplo.com.br"
+          autocomplete="off"
+        />
+        <button type="submit" id="submitBtn">
+          <svg
+            width="15"
+            height="15"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2.5"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <circle cx="11" cy="11" r="8" />
+            <line x1="21" y1="21" x2="16.65" y2="16.65" />
+          </svg>
+          Analisar
+        </button>
+      </form>
+
+      <div class="status" id="status"></div>
+
+      <div class="results" id="results"></div>
+
+      <div class="feature-grid" id="featureGrid">
+        <div class="feature-card">
+          <div class="feature-icon">
+            <svg
+              width="18"
+              height="18"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <rect x="2" y="3" width="20" height="14" rx="2" />
+              <line x1="8" y1="21" x2="16" y2="21" />
+              <line x1="12" y1="17" x2="12" y2="21" />
+            </svg>
+          </div>
+          <div class="feature-title">Fingerprints Wappalyzer</div>
+          <div class="feature-desc">
+            Base de dados open-source com centenas de tecnologias reconhecidas
+            por padrão.
+          </div>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">
+            <svg
+              width="18"
+              height="18"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
+            </svg>
+          </div>
+          <div class="feature-title">6 canais de detecção</div>
+          <div class="feature-desc">
+            Headers HTTP, HTML, meta tags, cookies, JS globals e URLs de
+            scripts.
+          </div>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">
+            <svg
+              width="18"
+              height="18"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <path
+                d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"
+              />
+              <polyline points="13 2 13 9 20 9" />
+            </svg>
+          </div>
+          <div class="feature-title">API pública</div>
+          <div class="feature-desc">
+            Acesse via
+            <code style="color: var(--accent); font-size: 12px"
+              >GET /api/v1/stack</code
+            >
+            sem cadastro ou chave de API.
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      const form = document.getElementById("form");
+      const urlInput = document.getElementById("url");
+      const statusEl = document.getElementById("status");
+      const resultsEl = document.getElementById("results");
+      const featureGridEl = document.getElementById("featureGrid");
+      const submitBtn = document.getElementById("submitBtn");
+      // Cole aqui a URL gerada pelo Railway (ex: https://seu-projeto.up.railway.app)
+      const RAILWAY_API_URL = "stackfly-production.up.railway.app";
+
+      function getApiEndpoint() {
+        if (
+          window.location.hostname === "localhost" ||
+          window.location.hostname === "127.0.0.1"
+        ) {
+          return "/api/analyze";
+        }
+        return (
+          (RAILWAY_API_URL ? RAILWAY_API_URL.replace(/\/$/, "") : "") +
+          "/api/analyze"
+        );
+      }
+      form.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const url = urlInput.value.trim();
+        if (!url) return;
+
+        submitBtn.disabled = true;
+        statusEl.className = "status";
+        statusEl.textContent = "Varrendo fingerprints...";
+        resultsEl.innerHTML = "";
+        featureGridEl.style.display = "none";
+
+        try {
+          const endpoint = getApiEndpoint();
+          const res = await fetch(endpoint, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ url }),
+          });
+          const data = await res.json();
+
+          if (!res.ok) {
+            statusEl.className = "status error";
+            statusEl.textContent =
+              data.error || "Não foi possível analisar esse site.";
+            return;
           }
 
-          if (t.implied) {
-            const tag = document.createElement('span');
-            tag.className = 'implied-tag';
-            tag.textContent = '(inferido)';
-            left.appendChild(tag);
-          }
+          statusEl.textContent = "";
+          renderResults(data);
+        } catch (err) {
+          statusEl.className = "status error";
+          statusEl.textContent = "Erro de conexão com o servidor de análise.";
+        } finally {
+          submitBtn.disabled = false;
+        }
+      });
 
-          row.appendChild(left);
+      function renderResults(data) {
+        resultsEl.innerHTML = "";
 
-          const conf = document.createElement('span');
-          conf.className = 'tech-confidence';
-          conf.textContent = `${t.confidence}%`;
-          row.appendChild(conf);
+        const meta = document.createElement("div");
+        meta.className = "result-meta";
+        const urlSpan = document.createElement("span");
+        urlSpan.textContent = data.finalUrl;
+        const badge = document.createElement("span");
+        badge.className = "badge";
+        badge.textContent = `${data.count} tecnologia${data.count !== 1 ? "s" : ""} detectada${data.count !== 1 ? "s" : ""}`;
+        meta.appendChild(urlSpan);
+        meta.appendChild(badge);
+        resultsEl.appendChild(meta);
 
-          list.appendChild(row);
+        if (data.count === 0) {
+          const p = document.createElement("div");
+          p.className = "status";
+          p.textContent =
+            "Nenhuma tecnologia reconhecida no fingerprint atual.";
+          resultsEl.appendChild(p);
+          return;
+        }
+
+        const categoryNames = Object.keys(data.grouped).sort((a, b) => {
+          const ai = CATEGORY_ORDER.indexOf(a);
+          const bi = CATEGORY_ORDER.indexOf(b);
+          if (ai === -1 && bi === -1) return a.localeCompare(b);
+          if (ai === -1) return 1;
+          if (bi === -1) return -1;
+          return ai - bi;
         });
 
-      block.appendChild(list);
-      resultsEl.appendChild(block);
-    }
-  }
-</script>
-</body>
+        for (const catName of categoryNames) {
+          const techs = data.grouped[catName];
+          const block = document.createElement("div");
+          block.className = "category";
+
+          const title = document.createElement("div");
+          title.className = "category-name";
+          title.textContent = catName;
+          block.appendChild(title);
+
+          const list = document.createElement("div");
+          list.className = "tech-list";
+
+          techs
+            .sort((a, b) => b.confidence - a.confidence)
+            .forEach((t) => {
+              const row = document.createElement("div");
+              row.className = "tech-row";
+
+              const left = document.createElement("div");
+              left.className = "tech-name-wrap";
+
+              const name = document.createElement("span");
+              name.className = "tech-name";
+              name.textContent = t.name;
+              left.appendChild(name);
+
+              if (t.version) {
+                const ver = document.createElement("span");
+                ver.className = "tech-version";
+                ver.textContent = `v${t.version}`;
+                left.appendChild(ver);
+              }
+
+              if (t.implied) {
+                const tag = document.createElement("span");
+                tag.className = "implied-tag";
+                tag.textContent = "(inferido)";
+                left.appendChild(tag);
+              }
+
+              row.appendChild(left);
+
+              const conf = document.createElement("span");
+              conf.className = "tech-confidence";
+              conf.textContent = `${t.confidence}%`;
+              row.appendChild(conf);
+
+              list.appendChild(row);
+            });
+
+          block.appendChild(list);
+          resultsEl.appendChild(block);
+        }
+      }
+    </script>
+  </body>
 </html>
