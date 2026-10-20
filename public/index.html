@@ -530,9 +530,10 @@
           statusEl.textContent = "";
           renderResults(data);
         } catch (err) {
+          console.error('Stackfly fetch error:', err);
           statusEl.className = "status error";
-          statusEl.textContent = "Erro de conexão com o servidor de análise.";
-        } finally {
+          statusEl.textContent = "Erro de conexão com o servidor de análise (" + err.message + ").";
+        }
           submitBtn.disabled = false;
         }
       });

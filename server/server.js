@@ -26,8 +26,11 @@ const categories = JSON.parse(
 
 const resultCache = new TtlCache(CACHE_TTL_MS);
 
-app.use(cors());
-app.use(express.json());
+app.use(cors({
+  origin: '*',
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type'],
+}));
 app.use(express.static(path.join(__dirname, '..', 'public')));
 
 function normalizeUrl(input) {
