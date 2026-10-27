@@ -1,0 +1,9 @@
+{
+  "description": "Loja WooCommerce (implica WordPress) atrás da Cloudflare",
+  "html": "<html><head><meta name=\"generator\" content=\"WooCommerce 8.9.1\"></head><body></body></html>",
+  "headersLower": { "server": "cloudflare", "cf-ray": "8a1b2c3d4e5f-GRU", "cf-cache-status": "DYNAMIC" },
+  "meta": { "generator": "WooCommerce 8.9.1" },
+  "cookies": { "woocommerce_recently_viewed": "12|34" },
+  "jsGlobals": { "wc_add_to_cart_params": "[object Object]", "woocommerce_params": "[object Object]" },
+  "scriptSrc": ["https://loja.exemplo.com/wp-content/plugins/woocommerce/assets/js/frontend/woocommerce.min.js?ver=8.9.1"]
+}

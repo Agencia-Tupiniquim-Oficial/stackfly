@@ -1,0 +1,60 @@
+[
+  {
+    "name": "Cloudflare",
+    "confidence": 100,
+    "categories": [
+      31
+    ],
+    "website": "https://www.cloudflare.com",
+    "icon": "CloudFlare.svg",
+    "implies": []
+  },
+  {
+    "name": "WooCommerce",
+    "confidence": 100,
+    "version": "8.9.1",
+    "categories": [
+      6,
+      87
+    ],
+    "website": "https://woocommerce.com",
+    "icon": "WooCommerce.svg",
+    "implies": []
+  },
+  {
+    "name": "WordPress",
+    "confidence": 100,
+    "categories": [
+      1,
+      11
+    ],
+    "website": "https://wordpress.org",
+    "icon": "WordPress.svg",
+    "implies": [
+      "PHP",
+      "MySQL"
+    ]
+  },
+  {
+    "name": "PHP",
+    "confidence": 100,
+    "categories": [
+      27
+    ],
+    "website": "https://php.net",
+    "icon": "PHP.svg",
+    "implied": true,
+    "implies": []
+  },
+  {
+    "name": "MySQL",
+    "confidence": 100,
+    "categories": [
+      34
+    ],
+    "website": "https://mysql.com",
+    "icon": "MySQL.svg",
+    "implied": true,
+    "implies": []
+  }
+]

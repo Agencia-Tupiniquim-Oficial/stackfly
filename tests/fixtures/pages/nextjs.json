@@ -1,0 +1,9 @@
+{
+  "description": "App Next.js renderizado no cliente, hospedado na Vercel",
+  "html": "<!DOCTYPE html><html><head></head><body><div id=\"__next\"></div><script id=\"__NEXT_DATA__\" type=\"application/json\">{}</script></body></html>",
+  "headersLower": { "x-powered-by": "Next.js 14.2.3", "server": "Vercel", "x-vercel-id": "gru1::abc" },
+  "meta": {},
+  "cookies": {},
+  "jsGlobals": { "__NEXT_DATA__": "[object Object]", "next.version": "14.2.3", "React.version": "18.3.1" },
+  "scriptSrc": ["https://app.exemplo.com/_next/static/chunks/main-abc123.js"]
+}

@@ -1,0 +1,51 @@
+[
+  {
+    "name": "Next.js",
+    "confidence": 100,
+    "version": "14.2.3",
+    "categories": [
+      12,
+      18,
+      22,
+      57
+    ],
+    "website": "https://nextjs.org",
+    "icon": "Next.js.svg",
+    "implies": [
+      "React",
+      "Webpack"
+    ]
+  },
+  {
+    "name": "React",
+    "confidence": 100,
+    "version": "18.3.1",
+    "categories": [
+      12
+    ],
+    "website": "https://reactjs.org",
+    "icon": "React.svg",
+    "implies": []
+  },
+  {
+    "name": "Vercel",
+    "confidence": 100,
+    "categories": [
+      62
+    ],
+    "website": "https://vercel.com",
+    "icon": "vercel.svg",
+    "implies": []
+  },
+  {
+    "name": "Webpack",
+    "confidence": 100,
+    "categories": [
+      19
+    ],
+    "website": "https://webpack.js.org/",
+    "icon": "Webpack.svg",
+    "implied": true,
+    "implies": []
+  }
+]

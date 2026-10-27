@@ -1,0 +1,9 @@
+{
+  "description": "Página estática sem tecnologia reconhecível",
+  "html": "<html><head><title>Oi</title></head><body>texto</body></html>",
+  "headersLower": { "content-type": "text/html" },
+  "meta": {},
+  "cookies": {},
+  "jsGlobals": {},
+  "scriptSrc": []
+}

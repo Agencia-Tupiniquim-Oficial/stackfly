@@ -1,0 +1,42 @@
+[
+  {
+    "name": "Cloudflare",
+    "confidence": 100,
+    "categories": [
+      31
+    ],
+    "website": "https://www.cloudflare.com",
+    "icon": "CloudFlare.svg",
+    "implies": []
+  },
+  {
+    "name": "Google Analytics",
+    "confidence": 100,
+    "categories": [
+      10
+    ],
+    "website": "https://google.com/analytics",
+    "icon": "Google Analytics.svg",
+    "implies": []
+  },
+  {
+    "name": "Google Tag Manager",
+    "confidence": 100,
+    "categories": [
+      42
+    ],
+    "website": "https://www.google.com/tagmanager",
+    "icon": "Google Tag Manager.svg",
+    "implies": []
+  },
+  {
+    "name": "Shopify",
+    "confidence": 100,
+    "categories": [
+      6
+    ],
+    "website": "https://shopify.com",
+    "icon": "Shopify.svg",
+    "implies": []
+  }
+]

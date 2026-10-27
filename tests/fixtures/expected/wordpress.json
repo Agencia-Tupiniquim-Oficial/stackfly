@@ -1,0 +1,72 @@
+[
+  {
+    "name": "jQuery",
+    "confidence": 100,
+    "version": "3.7.1",
+    "categories": [
+      59
+    ],
+    "website": "https://jquery.com",
+    "icon": "jQuery.svg",
+    "implies": []
+  },
+  {
+    "name": "Nginx",
+    "confidence": 100,
+    "version": "1.24.0",
+    "categories": [
+      22,
+      64
+    ],
+    "website": "https://nginx.org/en",
+    "icon": "Nginx.svg",
+    "implies": []
+  },
+  {
+    "name": "PHP",
+    "confidence": 100,
+    "version": "8.2.10",
+    "categories": [
+      27
+    ],
+    "website": "https://php.net",
+    "icon": "PHP.svg",
+    "implies": []
+  },
+  {
+    "name": "WordPress",
+    "confidence": 100,
+    "version": "6.5.2",
+    "categories": [
+      1,
+      11
+    ],
+    "website": "https://wordpress.org",
+    "icon": "WordPress.svg",
+    "implies": [
+      "PHP",
+      "MySQL"
+    ]
+  },
+  {
+    "name": "WordPress Block Editor",
+    "confidence": 100,
+    "categories": [
+      51
+    ],
+    "website": "https://wordpress.org/gutenberg/",
+    "icon": "WordPress.svg",
+    "implies": []
+  },
+  {
+    "name": "MySQL",
+    "confidence": 100,
+    "categories": [
+      34
+    ],
+    "website": "https://mysql.com",
+    "icon": "MySQL.svg",
+    "implied": true,
+    "implies": []
+  }
+]
