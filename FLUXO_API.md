@@ -1,208 +1,125 @@
 # Fluxo de API — Stackfly
 
-Como uma requisição entra no sistema e chega até a resposta final com as tecnologias detectadas.
+Como uma requisição entra no sistema e chega até a resposta final com as
+tecnologias detectadas.
 
 ---
 
 ## Visão geral
 
 ```
-Cliente (browser / curl / app)
+Cliente (interface web / curl / app)
         │
-        │  POST /api/analyze          ← UI web (mesma origem)
-        │  GET  /api/v1/stack?url=…   ← API pública
+        │  GET  /api/v1/stack?url=…   ← API pública e interface web
+        │  POST /api/analyze          ← rota legada (mesma lógica)
         ▼
-   [ Express server.js ]
+ [ Route Handler — src/app/api/v1/stack/route.ts ]   (runtime Node.js, maxDuration 60s)
         │
-        ├── Cache hit? ──── sim ──► retorna resultado em memória (cached: true)
-        │
-        └── Cache miss
-              │
-              ▼
-        [ analyze.js — fetchPageData() ]
-              │  Puppeteer (Chromium headless)
-              │  • carrega a URL alvo (networkidle2, timeout 30s)
-              │  • coleta HTML, headers, meta tags, cookies, srcs de scripts
-              │  • avalia variáveis globais JS no contexto da página
-              ▼
-        [ matcher.js — detectTechnologies() ]
-              │  Fingerprints do Wappalyzer (technologies.json)
-              │  • testa 6 canais: headers, meta, cookies, jsGlobals, html, scriptSrc
-              │  • resolve versão e confiança via regex com metadados (;\version:\1)
-              │  • expande tecnologias implicadas (ex: WordPress → PHP, MySQL)
-              ▼
-        [ server.js — analyzeUrl() ]
-              │  • agrupa detecções por categoria (categories.json)
-              │  • salva resultado no TtlCache (TTL 1h padrão)
-              ▼
-        Resposta JSON
+        ▼
+ [ lib/api/stack-handler.ts ]
+        │  1. rate limit por IP (Redis ou memória)       → 429
+        │  2. parseTargetUrl(): sintaxe, esquema, porta,
+        │     IP literal privado, localhost              → 400 / 403
+        ▼
+ [ lib/analyzer/analyze.ts ]
+        │  3. resolve DNS e exige que TODOS os IPs sejam públicos → 403 / 502
+        │  4. cache por URL canônica ── hit ──► resposta (cached: true)
+        │  5. junta requisições simultâneas pra mesma URL
+        │  6. fila de concorrência (MAX_CONCURRENT_ANALYSES) → 503
+        ▼
+ [ lib/analyzer/collect.ts ]  (Chromium via Puppeteer)
+        │  • BrowserContext novo por análise (cookies isolados)
+        │  • todo tráfego passa pelo proxy de saída (lib/security/egress-proxy.ts):
+        │    resolve DNS → valida IP → conecta no IP validado
+        │  • goto (DOMContentLoaded) + espera a rede acalmar (melhor esforço)
+        │  • coleta HTML, headers, meta, cookies, script[src], globais JS
+        │  • prazo duro: estourou → fecha o contexto (ou mata o Chromium) → 504
+        ▼
+ [ lib/fingerprints/matcher.ts ]
+        │  • 6 canais: headers, meta, cookies, jsGlobals, html, scriptSrc
+        │  • versão e confiança via metadados do padrão (\;version:\1)
+        │  • expande tecnologias implicadas (WordPress → PHP, MySQL)
+        ▼
+ [ lib/fingerprints/result.ts ]
+        │  • agrupa por categoria (categories.json)
+        │  • grava no cache só se deu certo
+        ▼
+   Resposta JSON
 ```
 
 ---
 
-## Etapas detalhadas
+## Proteção contra SSRF
 
-### 1. Entrada — duas rotas, mesma lógica
+A URL vem do usuário e é aberta por um navegador de verdade, que por sua vez
+carrega o que a página mandar. Por isso a validação acontece em camadas:
 
-| Rota | Método | Caller típico | Proteção |
-|------|--------|---------------|----------|
-| `/api/analyze` | `POST` body `{ url }` | UI web (index.html) | sem rate limit (mesma origem) |
-| `/api/v1/stack?url=` | `GET` query string | qualquer cliente externo | rate limit 10 req/min por IP · CORS aberto |
+| Camada | Onde | O que bloqueia |
+|---|---|---|
+| Sintaxe | `security/url.ts` | esquemas ≠ http/https, credenciais na URL, portas fora de 80/443/8080/8443, IP literal privado (inclusive `2130706433`, `0x7f.1`, `[::ffff:127.0.0.1]`, NAT64), `localhost`, `*.internal`, nomes sem ponto |
+| DNS | `security/resolve.ts` | domínios que resolvem para IP não público (ex.: `127.0.0.1.nip.io`), respostas mistas |
+| Rede do navegador | `security/egress-proxy.ts` | **toda** conexão do Chromium: documento, cada salto de redirect, sub-recursos, iframes, fetch/XHR, workers, WebSockets, beacons. O proxy resolve o nome, valida o IP e conecta no IP validado — o Chromium nunca resolve DNS sozinho, o que fecha o DNS rebinding |
+| Flags do Chromium | `analyzer/browser.ts` | QUIC desligado (UDP não passaria pelo proxy), WebRTC sem UDP fora do proxy, sem DNS prefetch, `<-loopback>` (loopback também passa pelo proxy), proxy padrão "buraco negro" |
+| Página | `analyzer/collect.ts` | só http/https/data/blob; `RTCPeerConnection` removido |
 
-Ambas chamam `analyzeUrl(rawUrl)` — ponto único de lógica.
-
----
-
-### 2. Normalização de URL
-
-```
-"exemplo.com.br"  →  "https://exemplo.com.br"
-```
-
-`normalizeUrl()` adiciona `https://` se o esquema estiver ausente. Nenhuma validação adicional — URLs inválidas deixam o Puppeteer falhar na etapa seguinte (erro 500/502 para o cliente).
+Os testes em `tests/browser/` abrem uma página maliciosa que tenta alcançar
+um serviço local por todos esses caminhos e verificam que ele não recebe
+nenhuma requisição (com um teste de controle provando que, sem a proteção, ele
+receberia).
 
 ---
 
-### 3. Verificação de cache (`TtlCache`)
-
-- Chave: URL normalizada.
-- Hit → resposta imediata com `cached: true`, sem abrir Puppeteer.
-- Miss → segue para `fetchPageData()`.
-- TTL padrão: **1 hora** (env `CACHE_TTL_MS`).
-- Backend: `Map` em memória. Sem persistência entre restarts.
-
----
-
-### 4. Coleta de dados — `fetchPageData()` (`analyze.js`)
-
-Abre um browser Chromium headless via Puppeteer e coleta:
+## Coleta de dados
 
 | Canal | Como é coletado |
 |-------|-----------------|
-| `html` | `page.content()` após carregamento completo |
-| `headersLower` | evento `response` + `page.goto()` — headers HTTP do documento raiz, normalizados para lowercase |
-| `meta` | `page.evaluate` → `querySelectorAll('meta[name], meta[property]')` |
-| `cookies` | `page.cookies()` → mapa `nome_lowercase → valor` |
-| `jsGlobals` | `page.evaluate` → percorre paths do tipo `window.wp`, `window.React` etc. (lista extraída dinamicamente de `technologies.json`) |
-| `scriptSrc` | `page.evaluate` → `querySelectorAll('script[src]')` |
-| `finalUrl` | `page.url()` após possíveis redirects |
+| `html` | `page.content()` depois do carregamento (até 2 MB) |
+| `headersLower` | headers HTTP do documento principal, em minúsculas |
+| `meta` | `meta[name]`, `meta[property]` |
+| `cookies` | cookies da página → mapa `nome_minúsculo → valor` |
+| `jsGlobals` | percorre `window.wp`, `window.React.version` etc. (lista extraída do dataset) |
+| `scriptSrc` | `script[src]` (até 500) |
+| `finalUrl` | URL após redirecionamentos |
 
-> Timeout de navegação: **30 segundos** (`waitUntil: 'networkidle2'`).  
-> O browser é sempre fechado no bloco `finally`, mesmo em erro.
+Imagens, mídia e fontes não são baixadas (nenhum canal usa).
 
 ---
 
-### 5. Detecção de tecnologias — `detectTechnologies()` (`matcher.js`)
-
-Itera sobre todos os fingerprints de `technologies.json` (formato Wappalyzer).
-
-**Para cada tecnologia**, testa 6 grupos de canais nessa ordem:
-
-```
-headers     → chave:valor com lookup case-insensitive
-meta        → chave:valor (name/property de meta tags)
-cookies     → chave:valor case-insensitive
-jsGlobals   → presença/valor de variável global (case-sensitive)
-html        → regex contra HTML completo
-scriptSrc   → regex contra lista de src de scripts (joined por \n)
-```
-
-**Formato dos padrões:**
+## Formato dos padrões
 
 ```
 "regex\;version:\1\;confidence:75"
 ```
 
-- A parte antes do primeiro `\;` é a regex.
-- `version:\1` → usa grupo de captura para extrair a versão.
+- A parte antes do primeiro `\;` é a regex (case-insensitive).
+- `version:\1` → usa o grupo de captura como versão.
 - `confidence:N` → confiança parcial (padrão 100).
-- Presença de chave em `jsGlobals` sem regex conta como match com confiança 100.
+- Chave presente sem regex (ex.: `"wp.ajax": ""`) conta como match.
 
-**Melhor match:** para cada tecnologia, mantém apenas o resultado com maior confiança; em empate, prioriza quem trouxe versão.
-
-**Tecnologias implicadas:** após o loop principal, percorre o campo `implies` de cada detecção e adiciona as tecnologias ausentes com `confidence: 100` e `implied: true`.
-
-> Exemplo: `WordPress` implica `PHP` e `MySQL`.
-
-**Resultado:** array ordenado por confiança decrescente.
+Para cada tecnologia vale o melhor match (maior confiança; em empate, o que
+trouxe versão). Depois, as tecnologias em `implies` que não foram detectadas
+entram com `implied: true` (um nível).
 
 ---
 
-### 6. Agrupamento e serialização — `analyzeUrl()` (`server.js`)
+## Estrutura da resposta e erros
 
-- Mapeia IDs numéricos de categoria para nomes legíveis via `categories.json`.
-- Constrói o objeto `grouped`: `{ "CMS": [...], "Programming languages": [...] }`.
-- Serializa cada tecnologia para o formato de resposta pública (remove campos internos como `icon`, `implies`).
-- Salva no cache e retorna.
-
----
-
-## Estrutura da resposta
-
-```json
-{
-  "url": "https://exemplo.com.br",
-  "finalUrl": "https://exemplo.com.br/",
-  "analyzedAt": "2026-10-16T14:00:00.000Z",
-  "count": 4,
-  "technologies": [
-    {
-      "name": "WordPress",
-      "categories": ["CMS", "Blogs"],
-      "confidence": 100,
-      "version": "6.5",
-      "website": "https://wordpress.org",
-      "implied": false
-    },
-    {
-      "name": "PHP",
-      "categories": ["Programming languages"],
-      "confidence": 100,
-      "version": null,
-      "website": "https://php.net",
-      "implied": true
-    }
-  ],
-  "grouped": {
-    "CMS": ["..."],
-    "Programming languages": ["..."]
-  },
-  "cached": false
-}
-```
-
-| Campo | Descrição |
-|-------|-----------|
-| `url` | URL normalizada enviada na requisição |
-| `finalUrl` | URL após redirects (capturada pelo Puppeteer) |
-| `analyzedAt` | Timestamp ISO 8601 da análise |
-| `count` | Total de tecnologias detectadas (incluindo implicadas) |
-| `technologies` | Lista ordenada por confiança decrescente |
-| `grouped` | Mesmos objetos indexados por nome de categoria |
-| `cached` | `true` se o resultado veio do cache em memória |
-
----
-
-## Erros
-
-| Código | Situação |
-|--------|----------|
-| `400` | `url` ausente ou não-string |
-| `429` | Rate limit excedido (só `/api/v1/stack`) |
-| `500` | Falha interna na rota `/api/analyze` |
-| `502` | Falha ao carregar/analisar o site na rota `/api/v1/stack` |
+Veja [`API_DOCS.md`](./API_DOCS.md).
 
 ---
 
 ## Arquivos envolvidos
 
 ```
-server/
-├── server.js      — Express, rotas, cache, orquestração do fluxo
-├── analyze.js     — Puppeteer: coleta HTML, headers, meta, cookies, JS globals
-├── matcher.js     — Motor de fingerprint (formato Wappalyzer)
-└── cache.js       — TtlCache: Map em memória com TTL configurável
-data/
-├── technologies.json  — Fingerprints (Wappalyzer ruleset)
-└── categories.json    — Mapa ID numérico → nome de categoria
+src/app/api/v1/stack/route.ts   — rota pública (GET)
+src/app/api/analyze/route.ts    — rota legada (POST)
+src/lib/api/stack-handler.ts    — rate limit, validação, erros → JSON
+src/lib/analyzer/analyze.ts     — orquestração (DNS, cache, deduplicação, fila)
+src/lib/analyzer/browser.ts     — inicialização do Chromium (Vercel x local)
+src/lib/analyzer/collect.ts     — Puppeteer: coleta da página
+src/lib/security/*              — URL, IPs, DNS, proxy de saída, rate limit, IP do cliente
+src/lib/cache/result-cache.ts   — cache (Redis ou memória)
+src/lib/fingerprints/*          — dataset, matcher, montagem do resultado
+data/technologies.json          — fingerprints (enthec/webappanalyzer)
+data/categories.json            — ID de categoria → nome
 ```

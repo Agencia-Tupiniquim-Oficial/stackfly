@@ -1,0 +1,9 @@
+{
+  "description": "Loja Shopify com Google Analytics 4",
+  "html": "<html><head></head><body></body></html>",
+  "headersLower": { "x-shopid": "12345", "server": "cloudflare" },
+  "meta": { "shopify-digital-wallet": "/12345/digital_wallets/dialog" },
+  "cookies": { "_shopify_y": "abc", "_ga": "GA1.1.1.1" },
+  "jsGlobals": { "Shopify": "[object Object]", "ShopifyAnalytics": "[object Object]", "gaGlobal": "[object Object]" },
+  "scriptSrc": ["https://cdn.shopify.com/s/files/1/theme.js", "https://www.googletagmanager.com/gtag/js?id=G-XXXX"]
+}

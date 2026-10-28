@@ -1,0 +1,17 @@
+{
+  "description": "WordPress 6.5 servido por nginx + PHP, com jQuery do core",
+  "html": "<!doctype html><html><head><meta name=\"generator\" content=\"WordPress 6.5.2\"><link rel='stylesheet' href='https://blog.exemplo.com/wp-content/themes/twentytwentyfour/style.css'></head><body class=\"home\"><div class=\"wp-block-group\"><div class=\"wp-block-paragraph\">Olá</div></div></body></html>",
+  "headersLower": {
+    "server": "nginx/1.24.0",
+    "x-powered-by": "PHP/8.2.10",
+    "link": "<https://blog.exemplo.com/wp-json/>; rel=\"https://api.w.org/\"",
+    "content-type": "text/html; charset=UTF-8"
+  },
+  "meta": { "generator": "WordPress 6.5.2", "viewport": "width=device-width, initial-scale=1" },
+  "cookies": {},
+  "jsGlobals": { "wp.receiveEmbedMessage": "function(e){...}", "jQuery.fn.jquery": "3.7.1" },
+  "scriptSrc": [
+    "https://blog.exemplo.com/wp-includes/js/jquery/jquery.min.js?ver=3.7.1",
+    "https://blog.exemplo.com/wp-includes/js/wp-embed.min.js?ver=6.5.2"
+  ]
+}

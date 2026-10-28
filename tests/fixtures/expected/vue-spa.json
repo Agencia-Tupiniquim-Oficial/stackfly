@@ -1,0 +1,43 @@
+[
+  {
+    "name": "Apache HTTP Server",
+    "confidence": 100,
+    "version": "2.4.57",
+    "categories": [
+      22
+    ],
+    "website": "https://httpd.apache.org/",
+    "icon": "Apache.svg",
+    "implies": []
+  },
+  {
+    "name": "Debian",
+    "confidence": 100,
+    "categories": [
+      28
+    ],
+    "website": "https://debian.org",
+    "icon": "Debian.png",
+    "implies": []
+  },
+  {
+    "name": "jsDelivr",
+    "confidence": 100,
+    "categories": [
+      31
+    ],
+    "website": "https://www.jsdelivr.com/",
+    "icon": "jsdelivr-icon.svg",
+    "implies": []
+  },
+  {
+    "name": "Vue.js",
+    "confidence": 100,
+    "categories": [
+      12
+    ],
+    "website": "https://vuejs.org",
+    "icon": "vue.svg",
+    "implies": []
+  }
+]

@@ -1,17 +1,36 @@
 {
   "name": "stackfly",
-  "version": "1.0.0",
+  "version": "2.0.0",
+  "private": true,
   "description": "Stackfly — diagnóstico e API pública de stack de tecnologia de sites (estilo Wappalyzer)",
-  "main": "server/server.js",
-  "type": "commonjs",
+  "engines": {
+    "node": "22.x"
+  },
   "scripts": {
-    "start": "node server/server.js",
-    "dev": "node --watch server/server.js"
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:browser": "vitest run --config vitest.browser.config.mts"
   },
   "dependencies": {
-    "cors": "^2.8.5",
-    "express": "^4.19.2",
-    "express-rate-limit": "^7.4.0",
-    "puppeteer": "^23.11.1"
+    "@sparticuz/chromium": "153.0.0",
+    "@upstash/redis": "^1.40.0",
+    "next": "16.4.3",
+    "puppeteer-core": "25.11.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "eslint": "^9.39.0",
+    "eslint-config-next": "16.4.3",
+    "puppeteer": "25.11.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.12"
   }
 }

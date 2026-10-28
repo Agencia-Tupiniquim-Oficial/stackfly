@@ -1,0 +1,9 @@
+{
+  "description": "SPA Vue 3 com conteúdo gerado em JS",
+  "html": "<html><head></head><body><div id=\"app\" data-v-app=\"\"><div data-v-7ba5bd90=\"\">Oi</div></div></body></html>",
+  "headersLower": { "server": "Apache/2.4.57 (Debian)" },
+  "meta": {},
+  "cookies": {},
+  "jsGlobals": { "__VUE__": "true" },
+  "scriptSrc": ["https://cdn.jsdelivr.net/npm/vue@3.4.21/dist/vue.global.prod.js"]
+}
