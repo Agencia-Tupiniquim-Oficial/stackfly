@@ -1,12 +1,11 @@
 import 'server-only';
 
-import type { Browser, HTTPRequest, Page } from 'puppeteer-core';
+import type { HTTPRequest, Page } from 'puppeteer-core';
 import { StackflyError, isStackflyError } from '@/lib/errors';
 import type { PageData } from '@/lib/fingerprints/types';
-import { startEgressProxy } from '@/lib/security/egress-proxy';
 import type { AddressPolicy } from '@/lib/security/ip';
 import type { Resolver } from '@/lib/security/resolve';
-import { killBrowser } from './browser';
+import { killBrowser, type BrowserHandle } from './browser';
 
 const USER_AGENT =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
@@ -23,13 +22,14 @@ const SKIPPED_RESOURCE_TYPES = new Set(['image', 'media', 'font']);
 const ALLOWED_SCHEMES = new Set(['http:', 'https:', 'data:', 'blob:']);
 
 export interface CollectOptions {
-  browser: Browser;
+  /** Navegador + proxy de saída (ver browser.ts). Uma análise por vez. */
+  handle: BrowserHandle;
   policy: AddressPolicy;
   resolver?: Resolver;
   jsPaths: string[];
   navigationTimeoutMs: number;
   settleTimeoutMs: number;
-  /** Prazo duro da coleta; ao estourar, o contexto (ou o navegador) é derrubado. */
+  /** Prazo duro da coleta; ao estourar, a página (ou o navegador) é derrubada. */
   deadlineMs: number;
   maxDownloadBytes: number;
 }
@@ -173,19 +173,52 @@ async function collectFromPage(page: Page, url: string, options: CollectOptions)
   };
 }
 
+const CLEANUP_TIMEOUT_MS = 5_000;
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T | 'timeout'> {
+  return Promise.race([promise, new Promise<'timeout'>((r) => setTimeout(() => r('timeout'), ms))]);
+}
+
+// Fecha as páginas da análise (inclusive popups abertos pelo site), menos a
+// âncora, e apaga cookies/cache para a próxima análise começar do zero.
+// false = navegador não respondeu.
+async function resetBrowser({ browser, anchor }: BrowserHandle, page: Page | null): Promise<boolean> {
+  const work = (async () => {
+    if (page && !page.isClosed()) {
+      const cdp = await page.createCDPSession();
+      await cdp.send('Network.clearBrowserCookies');
+      await cdp.send('Network.clearBrowserCache');
+      await cdp.detach();
+    }
+    const pages = (await browser.pages()).filter((p) => p !== anchor);
+    await Promise.all(pages.map((p) => p.close()));
+    return true;
+  })().catch((err) => {
+    console.error('[stackfly] falha ao limpar o navegador:', err);
+    return false;
+  });
+  return (await withTimeout(work, CLEANUP_TIMEOUT_MS)) === true;
+}
+
 /**
- * Abre a URL num BrowserContext isolado, com proxy de saída próprio, coleta os
- * dados que o matcher precisa e libera tudo no final.
+ * Abre a URL numa página nova, com uma sessão própria no proxy de saída,
+ * coleta os dados que o matcher precisa e libera tudo no final.
+ *
+ * Usa o contexto padrão do navegador porque o Chromium da Vercel roda com
+ * --single-process, que não cria páginas em BrowserContexts extras. Por isso
+ * só uma análise por navegador de cada vez (a sessão do proxy garante) e a
+ * limpeza de cookies/cache entre análises.
  */
 export const collectPageData: CollectPageData = async (url, options) => {
-  const { browser } = options;
-  const proxy = await startEgressProxy({
+  const { handle } = options;
+  const { browser, proxy } = handle;
+  const session = proxy.openSession({
     policy: options.policy,
     resolver: options.resolver,
     maxBytes: options.maxDownloadBytes,
   });
 
-  let context: Awaited<ReturnType<Browser['createBrowserContext']>> | null = null;
+  let page: Page | null = null;
   // Último documento que o frame principal tentou abrir (acompanha redirects).
   let lastMainFrameUrl = url;
   let deadlineTimer: NodeJS.Timeout | undefined;
@@ -197,22 +230,21 @@ export const collectPageData: CollectPageData = async (url, options) => {
   });
 
   try {
-    context = await browser.createBrowserContext({
-      proxyServer: proxy.url,
-      proxyBypassList: ['<-loopback>'],
-    });
-    const page = await context.newPage();
-    page.on('request', (req) => {
-      if (req.isNavigationRequest() && req.frame() === page.mainFrame()) lastMainFrameUrl = req.url();
-    });
-
-    return await Promise.race([collectFromPage(page, url, options), deadline]);
+    const run = (async () => {
+      page = await browser.newPage();
+      const p = page;
+      p.on('request', (req) => {
+        if (req.isNavigationRequest() && req.frame() === p.mainFrame()) lastMainFrameUrl = req.url();
+      });
+      return collectFromPage(p, url, options);
+    })();
+    return await Promise.race([run, deadline]);
   } catch (err) {
     const mainHost = hostOf(lastMainFrameUrl);
-    if (mainHost && proxy.blockedHosts.has(mainHost)) {
+    if (mainHost && session.blockedHosts.has(mainHost)) {
       throw new StackflyError('BLOCKED_TARGET', 'O site redirecionou para um destino não permitido.', { cause: err });
     }
-    if (proxy.budgetExceeded) {
+    if (session.budgetExceeded) {
       throw new StackflyError('NAVIGATION_FAILED', 'O site excedeu o limite de dados da análise.', { cause: err });
     }
     if (isStackflyError(err)) throw err;
@@ -222,14 +254,10 @@ export const collectPageData: CollectPageData = async (url, options) => {
     throw new StackflyError('NAVIGATION_FAILED', 'Não foi possível carregar o site informado.', { cause: err });
   } finally {
     clearTimeout(deadlineTimer);
-    if (context) {
-      const closed = await Promise.race([
-        context.close().then(() => true, () => false),
-        new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 5_000)),
-      ]);
-      // Contexto não fechou (renderer travado): derruba o navegador inteiro.
-      if (!closed) await killBrowser(browser);
-    }
-    await proxy.close();
+    // Corta a rede antes de limpar: nada da página sai depois daqui.
+    session.close();
+    const clean = await resetBrowser(handle, page);
+    // Navegador travado (ex.: loop infinito com --single-process): mata e relança na próxima.
+    if (!clean) await killBrowser(handle);
   }
 };

@@ -25,15 +25,16 @@ Cliente (interface web / curl / app)
         │  3. resolve DNS e exige que TODOS os IPs sejam públicos → 403 / 502
         │  4. cache por URL canônica ── hit ──► resposta (cached: true)
         │  5. junta requisições simultâneas pra mesma URL
-        │  6. fila de concorrência (MAX_CONCURRENT_ANALYSES) → 503
+        │  6. fila: uma análise por vez por instância → 503 se esperar demais
         ▼
  [ lib/analyzer/collect.ts ]  (Chromium via Puppeteer)
-        │  • BrowserContext novo por análise (cookies isolados)
-        │  • todo tráfego passa pelo proxy de saída (lib/security/egress-proxy.ts):
-        │    resolve DNS → valida IP → conecta no IP validado
+        │  • página nova por análise; cookies e cache apagados no final
+        │  • todo tráfego passa pelo proxy de saída (lib/security/egress-proxy.ts),
+        │    com uma sessão por análise: resolve DNS → valida IP → conecta no
+        │    IP validado; sem sessão aberta, o proxy recusa tudo
         │  • goto (DOMContentLoaded) + espera a rede acalmar (melhor esforço)
         │  • coleta HTML, headers, meta, cookies, script[src], globais JS
-        │  • prazo duro: estourou → fecha o contexto (ou mata o Chromium) → 504
+        │  • prazo duro: estourou → fecha a página (ou mata o Chromium) → 504
         ▼
  [ lib/fingerprints/matcher.ts ]
         │  • 6 canais: headers, meta, cookies, jsGlobals, html, scriptSrc

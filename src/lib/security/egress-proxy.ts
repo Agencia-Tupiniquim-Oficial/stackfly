@@ -1,5 +1,5 @@
 /**
- * Proxy HTTP local por onde passa TODO o tráfego do Chromium durante uma análise.
+ * Proxy HTTP local por onde passa TODO o tráfego do Chromium.
  *
  * Por que um proxy e não só `page.setRequestInterception`?
  *  - Interceptação vê a URL, mas quem resolve o DNS e conecta é o Chromium.
@@ -11,6 +11,14 @@
  *  - Cobre tudo que sai pela pilha de rede do navegador: documento, redirects
  *    (cada salto é uma nova requisição), sub-recursos, iframes, fetch/XHR,
  *    workers, WebSockets (vão por CONNECT) e beacons.
+ *
+ * O proxy é configurado no lançamento do navegador (`--proxy-server`) e vive
+ * enquanto ele viver. Cada análise abre uma SESSÃO com a sua política, o seu
+ * orçamento de bytes e o registro de hosts bloqueados. Sem sessão aberta, o
+ * proxy recusa tudo — nada sai do navegador entre uma análise e outra.
+ *
+ * (Um proxy por BrowserContext seria mais simples, mas o Chromium da Vercel
+ * roda com --single-process, que não suporta páginas em contextos extras.)
  *
  * O que NÃO passa por aqui (e é tratado em browser.ts): QUIC/HTTP3 (desligado),
  * UDP do WebRTC (desligado via flag) e DNS prefetch (desligado).
@@ -37,21 +45,36 @@ const HOP_BY_HOP = new Set([
   'upgrade',
 ]);
 
-export interface EgressProxyOptions {
+export interface ProxySessionOptions {
   policy: AddressPolicy;
   resolver?: Resolver;
   /** Total de bytes que o destino pode enviar somando todas as conexões. */
   maxBytes: number;
 }
 
-export interface EgressProxy {
-  /** Para o `proxyServer` do Chromium, ex.: "http://127.0.0.1:53123". */
-  readonly url: string;
+export interface ProxySession {
   /** Hosts recusados pela política (para diferenciar "bloqueado" de "falhou"). */
   readonly blockedHosts: ReadonlySet<string>;
   readonly budgetExceeded: boolean;
   readonly bytesReceived: number;
+  /** Encerra a sessão e derruba as conexões abertas durante ela. */
+  close(): void;
+}
+
+export interface EgressProxy {
+  /** Para o `--proxy-server` do Chromium, ex.: "http://127.0.0.1:53123". */
+  readonly url: string;
+  /** Uma sessão por vez; abrir outra com uma ativa é erro de programação. */
+  openSession(options: ProxySessionOptions): ProxySession;
   close(): Promise<void>;
+}
+
+interface SessionState extends ProxySessionOptions {
+  sockets: Set<Duplex>;
+  blockedHosts: Set<string>;
+  bytesReceived: number;
+  budgetExceeded: boolean;
+  closed: boolean;
 }
 
 function parseAuthority(authority: string): { host: string; port: number } | null {
@@ -62,69 +85,72 @@ function parseAuthority(authority: string): { host: string; port: number } | nul
   return { host: m[1].toLowerCase(), port };
 }
 
-export async function startEgressProxy(options: EgressProxyOptions): Promise<EgressProxy> {
-  const { policy, resolver, maxBytes } = options;
-  const sockets = new Set<Duplex>();
-  const blockedHosts = new Set<string>();
-  let bytesReceived = 0;
-  let budgetExceeded = false;
+function destroyAll(sockets: Set<Duplex>) {
+  for (const s of sockets) s.destroy();
+}
 
-  const track = (socket: Duplex) => {
-    sockets.add(socket);
-    socket.once('close', () => sockets.delete(socket));
-  };
+function track(sockets: Set<Duplex>, socket: Duplex) {
+  sockets.add(socket);
+  socket.once('close', () => sockets.delete(socket));
+}
 
-  const destroyAll = () => {
-    for (const s of sockets) s.destroy();
-  };
-
-  // Conta bytes vindos do destino; estourou o orçamento → derruba tudo.
-  const countBytes = (chunk: Buffer) => {
-    bytesReceived += chunk.length;
-    if (bytesReceived > maxBytes && !budgetExceeded) {
-      budgetExceeded = true;
-      destroyAll();
-    }
-  };
-
-  async function connectUpstream(host: string, port: number): Promise<net.Socket> {
-    let addresses;
-    try {
-      addresses = await resolveAllowedAddresses(host, port, policy, resolver);
-    } catch (err) {
-      if (err instanceof BlockedDestinationError) blockedHosts.add(host);
-      throw err;
-    }
-    // Conecta no IP validado — nunca no nome.
-    const { address } = addresses[0];
-    return new Promise((resolve, reject) => {
-      const upstream = net.connect({ host: address, port });
-      track(upstream);
-      upstream.setTimeout(CONNECT_TIMEOUT_MS, () => upstream.destroy(new Error('connect timeout')));
-      upstream.once('connect', () => {
-        upstream.setTimeout(IDLE_SOCKET_TIMEOUT_MS, () => upstream.destroy());
-        resolve(upstream);
-      });
-      upstream.once('error', reject);
-    });
+// Conta bytes vindos do destino; estourou o orçamento → derruba a sessão.
+function countBytes(s: SessionState, chunk: Buffer) {
+  s.bytesReceived += chunk.length;
+  if (s.bytesReceived > s.maxBytes && !s.budgetExceeded) {
+    s.budgetExceeded = true;
+    destroyAll(s.sockets);
   }
+}
+
+async function connectUpstream(s: SessionState, host: string, port: number): Promise<net.Socket> {
+  let addresses;
+  try {
+    addresses = await resolveAllowedAddresses(host, port, s.policy, s.resolver);
+  } catch (err) {
+    if (err instanceof BlockedDestinationError) s.blockedHosts.add(host);
+    throw err;
+  }
+  if (s.closed) throw new Error('session closed');
+  // Conecta no IP validado — nunca no nome.
+  const { address } = addresses[0];
+  return new Promise((resolve, reject) => {
+    const upstream = net.connect({ host: address, port });
+    track(s.sockets, upstream);
+    upstream.setTimeout(CONNECT_TIMEOUT_MS, () => upstream.destroy(new Error('connect timeout')));
+    upstream.once('connect', () => {
+      upstream.setTimeout(IDLE_SOCKET_TIMEOUT_MS, () => upstream.destroy());
+      resolve(upstream);
+    });
+    upstream.once('error', reject);
+  });
+}
+
+export async function startEgressProxy(): Promise<EgressProxy> {
+  const allSockets = new Set<Duplex>();
+  let session: SessionState | null = null;
+
+  // Sessão ativa e utilizável, ou null (requisição deve ser recusada).
+  const activeSession = () => (session && !session.closed && !session.budgetExceeded ? session : null);
 
   const server = http.createServer();
-  server.on('connection', (socket) => track(socket));
+  server.on('connection', (socket) => track(allSockets, socket));
   server.on('clientError', (_err, socket) => socket.destroy());
 
   // HTTPS e WebSockets: túnel CONNECT host:porta. O TLS continua ponta a ponta
   // (o Chromium valida o certificado do nome original).
   server.on('connect', async (req: http.IncomingMessage, client: Duplex, head: Buffer) => {
     client.on('error', () => client.destroy());
+    const s = activeSession();
     const target = parseAuthority(req.url ?? '');
-    if (!target || budgetExceeded) {
-      client.end('HTTP/1.1 400 Bad Request\r\n\r\n');
+    if (!s || !target) {
+      client.end('HTTP/1.1 403 Forbidden\r\n\r\n');
       return;
     }
+    track(s.sockets, client);
     let upstream: net.Socket;
     try {
-      upstream = await connectUpstream(target.host, target.port);
+      upstream = await connectUpstream(s, target.host, target.port);
     } catch (err) {
       const status = err instanceof BlockedDestinationError ? '403 Forbidden' : '502 Bad Gateway';
       client.end(`HTTP/1.1 ${status}\r\n\r\n`);
@@ -136,7 +162,7 @@ export async function startEgressProxy(options: EgressProxyOptions): Promise<Egr
     }
     client.write('HTTP/1.1 200 Connection Established\r\n\r\n');
     if (head.length) upstream.write(head);
-    upstream.on('data', countBytes);
+    upstream.on('data', (chunk: Buffer) => countBytes(s, chunk));
     upstream.pipe(client);
     client.pipe(upstream);
     upstream.on('error', () => client.destroy());
@@ -159,16 +185,20 @@ export async function startEgressProxy(options: EgressProxyOptions): Promise<Egr
     // viraria uma "análise bem-sucedida" de uma página vazia). Por isso, em
     // caso de recusa/falha, a conexão é derrubada — o navegador vê erro de
     // rede, como com o CONNECT recusado.
-    if (target.protocol !== 'http:' || budgetExceeded) {
+    const s = activeSession();
+    if (!s || target.protocol !== 'http:') {
       req.socket.destroy();
       return;
     }
+    // A conexão do Chromium com o proxy é keep-alive e pode atravessar
+    // análises; ela é registrada na sessão atual para cair junto com ela.
+    track(s.sockets, req.socket);
     const port = target.port ? Number(target.port) : 80;
     const host = target.hostname.replace(/^\[|\]$/g, '').toLowerCase();
 
     let upstreamSocket: net.Socket;
     try {
-      upstreamSocket = await connectUpstream(host, port);
+      upstreamSocket = await connectUpstream(s, host, port);
     } catch {
       req.socket.destroy();
       return;
@@ -193,7 +223,7 @@ export async function startEgressProxy(options: EgressProxyOptions): Promise<Egr
         if (!HOP_BY_HOP.has(name) && value !== undefined) resHeaders[name] = value;
       }
       res.writeHead(upstreamRes.statusCode ?? 502, upstreamRes.statusMessage, resHeaders);
-      upstreamRes.on('data', countBytes);
+      upstreamRes.on('data', (chunk: Buffer) => countBytes(s, chunk));
       upstreamRes.pipe(res);
       upstreamRes.on('error', () => res.destroy());
     });
@@ -214,16 +244,35 @@ export async function startEgressProxy(options: EgressProxyOptions): Promise<Egr
 
   return {
     url: `http://127.0.0.1:${port}`,
-    blockedHosts,
-    get budgetExceeded() {
-      return budgetExceeded;
-    },
-    get bytesReceived() {
-      return bytesReceived;
+    openSession(options) {
+      if (session && !session.closed) throw new Error('Egress proxy já tem uma sessão ativa.');
+      const s: SessionState = {
+        ...options,
+        sockets: new Set(),
+        blockedHosts: new Set(),
+        bytesReceived: 0,
+        budgetExceeded: false,
+        closed: false,
+      };
+      session = s;
+      return {
+        blockedHosts: s.blockedHosts,
+        get budgetExceeded() {
+          return s.budgetExceeded;
+        },
+        get bytesReceived() {
+          return s.bytesReceived;
+        },
+        close() {
+          s.closed = true;
+          destroyAll(s.sockets);
+        },
+      };
     },
     close: () =>
       new Promise<void>((resolve) => {
-        destroyAll();
+        if (session) session.closed = true;
+        destroyAll(allSockets);
         server.close(() => resolve());
       }),
   };

@@ -24,7 +24,6 @@ export const config = {
   // Prazo total de uma análise (fila + navegador + coleta). Precisa caber no
   // maxDuration da rota (60s).
   totalTimeoutMs: intFromEnv('ANALYSIS_TOTAL_TIMEOUT_MS', 45_000),
-  maxConcurrentAnalyses: intFromEnv('MAX_CONCURRENT_ANALYSES', 2),
   // Total de bytes baixados pela página analisada (todas as requisições).
   maxDownloadBytes: intFromEnv('ANALYSIS_MAX_DOWNLOAD_BYTES', 30 * 1024 * 1024),
   trustProxyHeaders: process.env.TRUST_PROXY_HEADERS === 'true',

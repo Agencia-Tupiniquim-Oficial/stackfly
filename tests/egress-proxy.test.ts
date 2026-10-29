@@ -1,7 +1,7 @@
 import http from 'node:http';
 import net from 'node:net';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { startEgressProxy, type EgressProxy } from '@/lib/security/egress-proxy';
+import { startEgressProxy, type EgressProxy, type ProxySessionOptions } from '@/lib/security/egress-proxy';
 import type { Resolver } from '@/lib/security/resolve';
 
 // "Serviço interno" que nunca deveria ser alcançado pelo navegador.
@@ -49,14 +49,22 @@ function proxyConnect(proxy: EgressProxy, authority: string): Promise<string> {
 }
 
 const denyAll = () => false;
+const loopbackResolver: Resolver = async () => [{ address: '127.0.0.1', family: 4 }];
 
 // Recusas em HTTP simples derrubam a conexão (sem resposta), para o Chromium
 // não tratar a resposta do proxy como se fosse a página do site.
 const refused = { code: 'ECONNRESET' };
 
+// Proxy com uma sessão aberta (como durante uma análise).
+async function openProxy(options: ProxySessionOptions) {
+  const proxy = await startEgressProxy();
+  const session = proxy.openSession(options);
+  return { proxy, session };
+}
+
 describe('proxy de saída', () => {
   it('recusa loopback via HTTP e via CONNECT, sem tocar no serviço interno', async () => {
-    const proxy = await startEgressProxy({ policy: denyAll, maxBytes: 1e6 });
+    const { proxy, session } = await openProxy({ policy: denyAll, maxBytes: 1e6 });
     try {
       const before = internalHits;
       await expect(proxyGet(proxy, `http://127.0.0.1:${internalPort}/`)).rejects.toMatchObject(refused);
@@ -64,7 +72,7 @@ describe('proxy de saída', () => {
       expect(await proxyConnect(proxy, `127.0.0.1:${internalPort}`)).toContain('403');
       expect(await proxyConnect(proxy, `[::1]:${internalPort}`)).toContain('403');
       expect(internalHits).toBe(before);
-      expect(proxy.blockedHosts.has('127.0.0.1')).toBe(true);
+      expect(session.blockedHosts.has('127.0.0.1')).toBe(true);
     } finally {
       await proxy.close();
     }
@@ -73,7 +81,7 @@ describe('proxy de saída', () => {
   it('DNS rebinding: valida o IP que o proxy resolveu, não o nome', async () => {
     // O nome "parece" público mas resolve para loopback na hora da conexão.
     const rebinding: Resolver = async () => [{ address: '127.0.0.1', family: 4 }];
-    const proxy = await startEgressProxy({ policy: (ip) => ip !== '127.0.0.1', resolver: rebinding, maxBytes: 1e6 });
+    const { proxy } = await openProxy({ policy: (ip) => ip !== '127.0.0.1', resolver: rebinding, maxBytes: 1e6 });
     try {
       const before = internalHits;
       await expect(proxyGet(proxy, `http://rebind.attacker.com:${internalPort}/`)).rejects.toMatchObject(refused);
@@ -86,8 +94,7 @@ describe('proxy de saída', () => {
 
   it('repassa HTTP e abre túnel CONNECT quando a política permite', async () => {
     const allowInternal = (ip: string, port: number) => ip === '127.0.0.1' && port === internalPort;
-    const resolver: Resolver = async () => [{ address: '127.0.0.1', family: 4 }];
-    const proxy = await startEgressProxy({ policy: allowInternal, resolver, maxBytes: 1e6 });
+    const { proxy } = await openProxy({ policy: allowInternal, resolver: loopbackResolver, maxBytes: 1e6 });
     try {
       const res = await proxyGet(proxy, `http://site.test:${internalPort}/ok`);
       expect(res).toEqual({ status: 200, body: 'segredo' });
@@ -100,7 +107,7 @@ describe('proxy de saída', () => {
   });
 
   it('recusa requisições que não estão em absolute-form', async () => {
-    const proxy = await startEgressProxy({ policy: () => true, maxBytes: 1e6 });
+    const { proxy } = await openProxy({ policy: () => true, maxBytes: 1e6 });
     try {
       expect((await proxyGet(proxy, '/admin')).status).toBe(400);
     } finally {
@@ -109,12 +116,62 @@ describe('proxy de saída', () => {
   });
 
   it('derruba as conexões quando o orçamento de bytes estoura', async () => {
-    const resolver: Resolver = async () => [{ address: '127.0.0.1', family: 4 }];
-    const proxy = await startEgressProxy({ policy: () => true, resolver, maxBytes: 1024 });
+    const { proxy, session } = await openProxy({ policy: () => true, resolver: loopbackResolver, maxBytes: 1024 });
     try {
       await proxyGet(proxy, `http://site.test:${internalPort}/big`).catch(() => undefined);
-      expect(proxy.budgetExceeded).toBe(true);
+      expect(session.budgetExceeded).toBe(true);
       await expect(proxyGet(proxy, `http://site.test:${internalPort}/ok`)).rejects.toMatchObject(refused);
+    } finally {
+      await proxy.close();
+    }
+  });
+});
+
+describe('sessões do proxy', () => {
+  const allowAll = { policy: () => true, resolver: loopbackResolver, maxBytes: 1e6 };
+
+  it('sem sessão aberta, nada sai (nem destino permitido)', async () => {
+    const proxy = await startEgressProxy();
+    try {
+      const before = internalHits;
+      await expect(proxyGet(proxy, `http://site.test:${internalPort}/ok`)).rejects.toMatchObject(refused);
+      expect(await proxyConnect(proxy, `site.test:${internalPort}`)).toContain('403');
+      expect(internalHits).toBe(before);
+    } finally {
+      await proxy.close();
+    }
+  });
+
+  it('depois de fechar a sessão, o tráfego é recusado de novo', async () => {
+    const { proxy, session } = await openProxy(allowAll);
+    try {
+      expect((await proxyGet(proxy, `http://site.test:${internalPort}/ok`)).status).toBe(200);
+      session.close();
+      await expect(proxyGet(proxy, `http://site.test:${internalPort}/ok`)).rejects.toMatchObject(refused);
+    } finally {
+      await proxy.close();
+    }
+  });
+
+  it('cada sessão tem política e registro de bloqueios próprios', async () => {
+    const { proxy, session: first } = await openProxy({ ...allowAll, policy: denyAll });
+    try {
+      await proxyGet(proxy, `http://site.test:${internalPort}/ok`).catch(() => undefined);
+      expect(first.blockedHosts.has('site.test')).toBe(true);
+      first.close();
+
+      const second = proxy.openSession(allowAll);
+      expect(second.blockedHosts.size).toBe(0);
+      expect((await proxyGet(proxy, `http://site.test:${internalPort}/ok`)).status).toBe(200);
+    } finally {
+      await proxy.close();
+    }
+  });
+
+  it('não permite duas sessões ao mesmo tempo', async () => {
+    const { proxy } = await openProxy(allowAll);
+    try {
+      expect(() => proxy.openSession(allowAll)).toThrow();
     } finally {
       await proxy.close();
     }

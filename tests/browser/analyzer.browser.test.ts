@@ -8,16 +8,14 @@
  */
 import http from 'node:http';
 import type net from 'node:net';
-import type { Browser } from 'puppeteer-core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { getBrowser } from '@/lib/analyzer/browser';
+import { launchBrowser, type BrowserHandle } from '@/lib/analyzer/browser';
 import { collectPageData, type CollectOptions } from '@/lib/analyzer/collect';
 import { collectJsPaths, detectTechnologies } from '@/lib/fingerprints/matcher';
 import type { AddressPolicy } from '@/lib/security/ip';
 import type { Resolver } from '@/lib/security/resolve';
 import { technologies } from '../helpers/dataset';
 
-let browser: Browser;
 let site: http.Server;
 let secret: http.Server;
 let sitePort: number;
@@ -89,6 +87,9 @@ beforeAll(async () => {
         return res.writeHead(302, { location: `http://127.0.0.1:${secretPort}/admin` }).end();
       case '/loop':
         return res.writeHead(200, { 'content-type': 'text/html' }).end('<script>while(true){}</script>');
+      case '/set-cookie':
+        res.writeHead(200, { 'content-type': 'text/html', 'set-cookie': 'vazou=1; Path=/' });
+        return res.end('<html><body>cookie</body></html>');
       case '/slow':
         return; // nunca responde
       default:
@@ -101,15 +102,12 @@ beforeAll(async () => {
   const tmp = http.createServer();
   closedPort = await listen(tmp);
   await new Promise<void>((r) => tmp.close(() => r()));
-
-  browser = await getBrowser();
 });
 
 afterAll(async () => {
   site?.closeAllConnections();
   site?.close();
   secret?.close();
-  await browser?.close();
 });
 
 // Libera só loopback nas portas dos fixtures (nunca a porta secreta).
@@ -120,9 +118,11 @@ const resolver: Resolver = async (host) => {
   throw new Error('ENOTFOUND');
 };
 
+let handle: BrowserHandle;
+
 function options(overrides: Partial<CollectOptions> = {}): CollectOptions {
   return {
-    browser,
+    handle,
     policy,
     resolver,
     jsPaths: collectJsPaths(technologies),
@@ -136,7 +136,32 @@ function options(overrides: Partial<CollectOptions> = {}): CollectOptions {
 
 const url = (path: string) => `http://site.test:${sitePort}${path}`;
 
-describe('análise com Chromium real', () => {
+// Na Vercel o @sparticuz/chromium roda com --single-process (só o contexto
+// padrão funciona, um renderer para tudo). A suíte roda nos dois modos — a
+// primeira versão só era testada no modo normal e quebrou em produção.
+// O --single-process só é exercitado no Linux: no Windows o Chromium não dá
+// suporte a esse modo e cai de forma aleatória (não reflete a Vercel).
+const MODES: Array<[string, string[]]> = [
+  ['modo normal', []],
+  ...(process.platform === 'linux'
+    ? ([['--single-process (como na Vercel)', ['--single-process', '--no-zygote']]] as Array<[string, string[]]>)
+    : []),
+];
+
+describe.each(MODES)('análise com Chromium real — %s', (_mode, extraArgs) => {
+  beforeAll(async () => {
+    handle = await launchBrowser(extraArgs);
+  });
+
+  afterAll(async () => {
+    await handle?.browser.close().catch(() => undefined);
+  });
+
+  // Faz o papel do getBrowser(): relança se o navegador foi derrubado.
+  async function ensureBrowser() {
+    if (!handle.browser.connected) handle = await launchBrowser(extraArgs);
+  }
+
   it('detecta WordPress (com versão), PHP, Nginx e infere MySQL', async () => {
     const page = await collectPageData(url('/wp'), options());
     const det = Object.fromEntries(detectTechnologies(technologies, page).map((d) => [d.name, d]));
@@ -200,13 +225,27 @@ describe('análise com Chromium real', () => {
     });
   });
 
-  it('página com loop infinito estoura o prazo e o navegador continua utilizável', async () => {
+  it('cookies de uma análise não vazam para a próxima', async () => {
+    const first = await collectPageData(url('/set-cookie'), options());
+    expect(first.cookies.vazou).toBe('1');
+    const second = await collectPageData(url('/wp'), options());
+    expect(second.cookies).not.toHaveProperty('vazou');
+  });
+
+  it('análises seguidas no mesmo navegador funcionam', async () => {
+    for (let i = 0; i < 3; i++) {
+      const page = await collectPageData(url('/wp'), options());
+      expect(detectTechnologies(technologies, page).map((d) => d.name)).toContain('WordPress');
+    }
+  });
+
+  it('página com loop infinito estoura o prazo e a análise seguinte funciona', async () => {
     await expect(
       collectPageData(url('/loop'), options({ navigationTimeoutMs: 3_000, deadlineMs: 4_000 })),
     ).rejects.toMatchObject({ code: 'TIMEOUT' });
 
-    const next = await getBrowser();
-    const page = await collectPageData(url('/wp'), options({ browser: next }));
+    await ensureBrowser();
+    const page = await collectPageData(url('/wp'), options());
     expect(detectTechnologies(technologies, page).map((d) => d.name)).toContain('WordPress');
   });
 });

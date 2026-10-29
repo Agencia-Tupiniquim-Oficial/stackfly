@@ -24,13 +24,15 @@ export function getAnalyzer(): Analyzer {
       cache: redis ? new RedisResultCache(redis, config.cacheTtlMs) : new MemoryResultCache(config.cacheTtlMs),
       dataset: loadDataset,
       policy: defaultAddressPolicy,
-      maxConcurrent: config.maxConcurrentAnalyses,
+      // Um navegador por instância, uma análise por vez nele (o Chromium da
+      // Vercel roda em processo único). As demais esperam na fila.
+      maxConcurrent: 1,
       totalTimeoutMs: config.totalTimeoutMs,
       collect: async (url, { deadlineMs }) => {
         jsPaths ??= collectJsPaths(loadDataset().technologies);
-        const browser = await getBrowser();
+        const handle = await getBrowser();
         return collectPageData(url, {
-          browser,
+          handle,
           policy: defaultAddressPolicy,
           jsPaths,
           navigationTimeoutMs: config.navigationTimeoutMs,

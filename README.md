@@ -87,7 +87,6 @@ Nenhuma é obrigatória para rodar localmente. Copie `.env.example` para
 | `CACHE_TTL_MS` | `3600000` | Tempo de cache por URL |
 | `RATE_LIMIT_MAX` / `RATE_LIMIT_WINDOW_MS` | `10` / `60000` | Rate limit por IP |
 | `ANALYSIS_TOTAL_TIMEOUT_MS` | `45000` | Prazo total de uma análise |
-| `MAX_CONCURRENT_ANALYSES` | `2` | Análises simultâneas por instância |
 
 Lista completa e comentada em [`.env.example`](./.env.example). Nenhuma
 dessas variáveis vai para o navegador (não há nenhuma `NEXT_PUBLIC_*`).
@@ -145,8 +144,10 @@ npm run build
   os planos. O prazo interno da análise é 45s.
 - Memória: o `@sparticuz/chromium` recomenda ≥ 1600 MB. No Hobby a memória é
   fixa (2 GB); no Pro dá para ajustar em **Settings → Functions**.
-- Um navegador por instância, reaproveitado entre requisições; cada análise
-  usa um contexto isolado com proxy próprio.
+- Um navegador por instância, reaproveitado entre requisições, fazendo uma
+  análise por vez (o Chromium da Vercel roda com `--single-process`, que não
+  suporta contextos isolados). Cada análise abre uma sessão no proxy de saída
+  e, no final, a página é fechada e cookies/cache são apagados.
 
 ## 7. Problemas comuns do Puppeteer
 
@@ -156,8 +157,8 @@ npm run build
 | `503 BROWSER_UNAVAILABLE` na Vercel | Veja o log da função. `ENOENT ... chromium.br` → os binários não entraram no bundle (confira `outputFileTracingIncludes`). Erro de versão/protocolo → `puppeteer-core` e `@sparticuz/chromium` desalinhados |
 | Erro de sandbox em Docker/Linux como root | `CHROME_NO_SANDBOX=true` |
 | `504 TIMEOUT` frequente | Site lento ou com anti-bot. Ajuste `ANALYSIS_NAVIGATION_TIMEOUT_MS` (mantendo `ANALYSIS_TOTAL_TIMEOUT_MS` < 60s) |
-| `503 SERVER_BUSY` | Muitas análises na mesma instância; aumente `MAX_CONCURRENT_ANALYSES` com cuidado (memória) |
-| Função estoura memória | Reduza `MAX_CONCURRENT_ANALYSES` para 1 |
+| `503 SERVER_BUSY` | Fila longa na mesma instância (cada instância faz uma análise por vez). Normalmente passa sozinho; a Vercel abre novas instâncias com o volume |
+| `NAVIGATION_FAILED` com `Target closed` no log | Página criada em `BrowserContext` separado: não funciona com `--single-process`. Use o contexto padrão (ver `collect.ts`) |
 | Site detecta poucas tecnologias | Anti-bot/CAPTCHA bloqueando o headless; ou a tecnologia só aparece após interação |
 
 ## Limitações conhecidas
@@ -165,7 +166,8 @@ npm run build
 - **Serverless:** o `@sparticuz/chromium` roda com `--single-process`. Uma
   página que trava o JS (loop infinito) trava o navegador da instância; o
   prazo da análise detecta isso, mata o processo e o próximo pedido relança
-  o Chromium — mas outra análise simultânea na mesma instância falha junto.
+  o Chromium. Por causa do processo único, cada instância faz uma análise
+  por vez; picos de tráfego dependem de a Vercel abrir mais instâncias.
 - **Rate limit:** janela fixa por IP (como antes). IPv6 é agrupado por /64.
   Sem Redis, cada instância conta separado. Para abuso em larga escala,
   combine com as regras de rate limit do **Vercel Firewall**.
