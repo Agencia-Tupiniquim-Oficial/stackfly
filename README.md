@@ -119,8 +119,10 @@ npm run build
 
 ## 6. Deploy na Vercel
 
-1. Em vercel.com → **Add New → Project**, importe o repositório. O preset
-   **Next.js** é detectado sozinho; não precisa de `vercel.json`.
+1. Em vercel.com → **Add New → Project**, importe o repositório. O
+   `vercel.json` fixa o framework (Next.js) e o diretório de saída (`.next`),
+   sobrescrevendo configurações antigas do painel (o projeto já esteve
+   configurado como site estático com saída em `public`).
 2. **Node.js:** a versão vem do `engines` do `package.json` (`22.x`).
 3. **Redis (recomendado):** em **Storage / Marketplace**, adicione
    **Upstash for Redis** e conecte ao projeto. As variáveis
