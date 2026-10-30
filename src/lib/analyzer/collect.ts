@@ -7,8 +7,40 @@ import type { AddressPolicy } from '@/lib/security/ip';
 import type { Resolver } from '@/lib/security/resolve';
 import { killBrowser, type BrowserHandle } from './browser';
 
-const USER_AGENT =
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
+/**
+ * User-Agent de um Chrome comum no Windows, com a versão REAL do navegador.
+ *
+ * O padrão do headless traz "HeadlessChrome", que muitos sites bloqueiam. E
+ * um UA inventado também é barrado: o antigo "Chrome/124.0" (o Chrome real
+ * sempre manda "124.0.0.0") fazia o firewall de alguns sites, como o
+ * ckc.com.br, derrubar a conexão. Os client hints (sec-ch-ua) acompanham o
+ * UA para não se contradizerem.
+ */
+export function buildUserAgent(browserVersion: string) {
+  const major = browserVersion.match(/(\d+)\./)?.[1] ?? '130';
+  return {
+    userAgent: `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${major}.0.0.0 Safari/537.36`,
+    platform: 'Win32',
+    userAgentMetadata: {
+      brands: [
+        { brand: 'Chromium', version: major },
+        { brand: 'Google Chrome', version: major },
+        { brand: 'Not.A/Brand', version: '99' },
+      ],
+      fullVersionList: [
+        { brand: 'Chromium', version: `${major}.0.0.0` },
+        { brand: 'Google Chrome', version: `${major}.0.0.0` },
+        { brand: 'Not.A/Brand', version: '99.0.0.0' },
+      ],
+      platform: 'Windows',
+      platformVersion: '10.0.0',
+      architecture: 'x86',
+      model: '',
+      mobile: false,
+      bitness: '64',
+    },
+  };
+}
 
 // Limites do que é coletado da página (o matcher roda regex sobre isso).
 const MAX_HTML_CHARS = 2_000_000;
@@ -65,7 +97,7 @@ async function disableWebRtc(page: Page) {
 async function collectFromPage(page: Page, url: string, options: CollectOptions): Promise<PageData> {
   page.setDefaultTimeout(options.navigationTimeoutMs);
 
-  await page.setUserAgent({ userAgent: USER_AGENT });
+  await page.setUserAgent(buildUserAgent(await page.browser().version()));
   await disableWebRtc(page);
   await page.setRequestInterception(true);
   page.on('request', (req: HTTPRequest) => {
@@ -180,8 +212,13 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T | 'timeout'>
 }
 
 // Fecha as páginas da análise (inclusive popups abertos pelo site), menos a
-// âncora, e apaga cookies/cache para a próxima análise começar do zero.
-// false = navegador não respondeu.
+// âncora, apaga cookies/cache e confere que o navegador ainda responde.
+// false = navegador não respondeu e precisa ser derrubado.
+//
+// A checagem final é essencial: com --single-process, uma página com loop
+// infinito deixa o JS preso DENTRO do processo do navegador. Fechar a página
+// "funciona", mas o processo continua girando e toda análise seguinte
+// estoura o prazo. Só uma chamada à página âncora revela isso.
 async function resetBrowser({ browser, anchor }: BrowserHandle, page: Page | null): Promise<boolean> {
   const work = (async () => {
     if (page && !page.isClosed()) {
@@ -192,7 +229,7 @@ async function resetBrowser({ browser, anchor }: BrowserHandle, page: Page | nul
     }
     const pages = (await browser.pages()).filter((p) => p !== anchor);
     await Promise.all(pages.map((p) => p.close()));
-    return true;
+    return (await anchor.evaluate(() => 1)) === 1;
   })().catch((err) => {
     console.error('[stackfly] falha ao limpar o navegador:', err);
     return false;

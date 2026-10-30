@@ -20,8 +20,25 @@ function networkLockdownArgs(proxyUrl: string) {
     '--disable-domain-reliability',
     '--disable-sync',
     '--no-pings',
-    '--disable-features=NetworkPrediction,PrivateNetworkAccessPermissionPrompt',
   ];
+}
+
+// Features que desligamos além das que o navegador já desliga.
+const EXTRA_DISABLED_FEATURES = ['NetworkPrediction', 'PrivateNetworkAccessPermissionPrompt'];
+
+/**
+ * Acrescenta features à flag --disable-features SEM duplicá-la. O Chromium usa
+ * só a última ocorrência da flag, então uma segunda `--disable-features=...`
+ * apaga a primeira. O @sparticuz/chromium já passa uma (AudioServiceOutOfProcess,
+ * IsolateOrigins, site-per-process) que o modo de processo único exige: com a
+ * lista sobrescrita, a primeira navegação ficava lenta e instável.
+ */
+export function withDisabledFeatures(args: string[], extra: string[] = EXTRA_DISABLED_FEATURES): string[] {
+  const prefix = '--disable-features=';
+  const existing = args.find((a) => a.startsWith(prefix));
+  const rest = args.filter((a) => !a.startsWith(prefix));
+  const features = new Set([...(existing ? existing.slice(prefix.length).split(',') : []), ...extra]);
+  return [...rest, `${prefix}${[...features].join(',')}`];
 }
 
 // Flags do @sparticuz/chromium que enfraquecem o isolamento entre origens e
@@ -33,6 +50,7 @@ const UNSAFE_SERVERLESS_ARGS = new Set([
 ]);
 
 const LAUNCH_TIMEOUT_MS = 20_000;
+const KILL_WAIT_MS = 3_000;
 // Teto para qualquer chamada CDP; o prazo da análise é menor que isso.
 const PROTOCOL_TIMEOUT_MS = 30_000;
 
@@ -72,13 +90,13 @@ async function launch(proxy: EgressProxy, extraArgs: string[]): Promise<Browser>
     const args = chromium.args.filter((a) => !UNSAFE_SERVERLESS_ARGS.has(a));
     return puppeteer.launch({
       ...common,
-      args: [...args, ...lockdown],
+      args: withDisabledFeatures([...args, ...lockdown]),
       executablePath: await chromium.executablePath(),
     });
   }
 
   const sandboxArgs = process.env.CHROME_NO_SANDBOX === 'true' ? ['--no-sandbox', '--disable-setuid-sandbox'] : [];
-  const args = [...lockdown, '--disable-dev-shm-usage', ...sandboxArgs, ...extraArgs];
+  const args = withDisabledFeatures([...lockdown, '--disable-dev-shm-usage', ...sandboxArgs, ...extraArgs]);
 
   if (process.env.CHROME_EXECUTABLE_PATH) {
     const puppeteer = await import('puppeteer-core');
@@ -112,6 +130,7 @@ export async function launchBrowser(extraArgs: string[] = []): Promise<BrowserHa
 }
 
 let handlePromise: Promise<BrowserHandle> | null = null;
+let currentBrowser: Browser | null = null;
 
 /**
  * Um único navegador por instância, reaproveitado entre requisições. Se o
@@ -119,20 +138,28 @@ let handlePromise: Promise<BrowserHandle> | null = null;
  */
 export async function getBrowser(): Promise<BrowserHandle> {
   if (!handlePromise) {
-    handlePromise = launchBrowser()
+    // Os callbacks só zeram o cache se ainda for ESTA promise: um navegador
+    // antigo (morto por killBrowser) emite 'disconnected' depois que o novo já
+    // foi lançado, e não pode apagar o novo da vista.
+    const current: Promise<BrowserHandle> = launchBrowser()
       .then((handle) => {
+        currentBrowser = handle.browser;
         handle.browser.once('disconnected', () => {
-          handlePromise = null;
+          if (handlePromise === current) {
+            handlePromise = null;
+            currentBrowser = null;
+          }
         });
         return handle;
       })
       .catch((err) => {
-        handlePromise = null;
+        if (handlePromise === current) handlePromise = null;
         console.error('[stackfly] falha ao iniciar o Chromium:', err);
         throw new StackflyError('BROWSER_UNAVAILABLE', 'O navegador de análise está indisponível no momento.', {
           cause: err,
         });
       });
+    handlePromise = current;
   }
   return handlePromise;
 }
@@ -142,11 +169,27 @@ export async function getBrowser(): Promise<BrowserHandle> {
  * um loop infinito em JS bloqueia tudo). Mata o processo e força relançar.
  */
 export async function killBrowser({ browser, proxy }: BrowserHandle): Promise<void> {
-  handlePromise = null;
+  // Só esquece o navegador se for o atual (um relançamento pode já ter ocorrido).
+  if (currentBrowser === browser) {
+    handlePromise = null;
+    currentBrowser = null;
+  }
+  const proc = browser.process();
   try {
-    browser.process()?.kill('SIGKILL');
+    proc?.kill('SIGKILL');
   } catch (err) {
     console.error('[stackfly] falha ao matar o processo do Chromium:', err);
+  }
+  // Espera o processo realmente sair: o Chromium travado continua consumindo
+  // CPU até morrer, e o próximo navegador não pode começar a subir nesse meio tempo.
+  if (proc && proc.exitCode === null && proc.signalCode === null) {
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, KILL_WAIT_MS);
+      proc.once('exit', () => {
+        clearTimeout(timer);
+        resolve();
+      });
+    });
   }
   await browser.disconnect().catch(() => undefined);
   await proxy.close();

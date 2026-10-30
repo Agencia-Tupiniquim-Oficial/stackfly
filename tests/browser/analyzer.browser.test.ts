@@ -73,6 +73,14 @@ beforeAll(async () => {
     res.end('segredo');
   });
   site = http.createServer((req, res) => {
+    // Imita firewalls anti-bot (como o do ckc.com.br): derruba a conexão se o
+    // UA não parece o de um Chrome real ("Chrome/NNN.0.0.0", sem "Headless").
+    if (req.url === '/waf') {
+      const ua = req.headers['user-agent'] ?? '';
+      const hints = String(req.headers['sec-ch-ua'] ?? '');
+      if (!/Chrome\/\d+\.0\.0\.0 /.test(ua) || /headless/i.test(ua + hints)) return req.socket.destroy();
+      return res.writeHead(200, { 'content-type': 'text/html' }).end('<html><body>liberado</body></html>');
+    }
     switch (req.url) {
       case '/wp':
         res.writeHead(200, { 'content-type': 'text/html', 'x-powered-by': 'PHP/8.2.10', server: 'nginx/1.24.0' });
@@ -223,6 +231,11 @@ describe.each(MODES)('análise com Chromium real — %s', (_mode, extraArgs) => 
     await expect(collectPageData(`http://127.0.0.1:${closedPort}/`, options())).rejects.toMatchObject({
       code: 'NAVIGATION_FAILED',
     });
+  });
+
+  it('envia um User-Agent de Chrome real, aceito por firewalls anti-bot', async () => {
+    const page = await collectPageData(url('/waf'), options());
+    expect(page.html).toContain('liberado');
   });
 
   it('cookies de uma análise não vazam para a próxima', async () => {
