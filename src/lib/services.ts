@@ -55,3 +55,15 @@ export function getRateLimiter(): RateLimiter {
   }
   return rateLimiter;
 }
+
+let apiKeyRateLimiter: RateLimiter | null = null;
+
+export function getApiKeyRateLimiter(): RateLimiter {
+  if (!apiKeyRateLimiter) {
+    const redis = getRedis();
+    apiKeyRateLimiter = redis
+      ? new RedisRateLimiter(redis, config.rateLimitWindowMs, config.apiKeyRateLimitMax)
+      : new MemoryRateLimiter(config.rateLimitWindowMs, config.apiKeyRateLimitMax);
+  }
+  return apiKeyRateLimiter;
+}

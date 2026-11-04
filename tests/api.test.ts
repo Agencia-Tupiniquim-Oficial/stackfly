@@ -28,13 +28,28 @@ function makeAnalyzer(overrides: Partial<AnalyzerDeps> = {}) {
   return { analyzer, collect: (overrides.collect as typeof collect) ?? collect };
 }
 
-function makeHandler(opts: { analyzerOverrides?: Partial<AnalyzerDeps>; max?: number } = {}) {
+function makeHandler(
+  opts: {
+    analyzerOverrides?: Partial<AnalyzerDeps>;
+    max?: number;
+    apiKeyMax?: number;
+    validApiKeys?: Readonly<Record<string, true>>;
+  } = {},
+) {
   const { analyzer, collect } = makeAnalyzer(opts.analyzerOverrides);
   const limiter = new MemoryRateLimiter(60_000, opts.max ?? 100);
-  const handle = createStackHandler({ analyzer: () => analyzer, rateLimiter: () => limiter });
-  const get = (url?: string) => {
+  const keyLimiter = opts.apiKeyMax !== undefined
+    ? new MemoryRateLimiter(60_000, opts.apiKeyMax)
+    : undefined;
+  const handle = createStackHandler({
+    analyzer: () => analyzer,
+    rateLimiter: () => limiter,
+    apiKeyRateLimiter: keyLimiter ? () => keyLimiter : undefined,
+    validApiKeys: opts.validApiKeys,
+  });
+  const get = (url?: string, headers?: HeadersInit) => {
     const qs = url === undefined ? '' : `?url=${encodeURIComponent(url)}`;
-    return handle(new Request(`http://localhost/api/v1/stack${qs}`), url ?? null);
+    return handle(new Request(`http://localhost/api/v1/stack${qs}`, { headers }), url ?? null);
   };
   return { get, collect };
 }
@@ -238,5 +253,74 @@ describe('identificação do cliente (rate limit por IP)', () => {
 
   it('com TRUST_PROXY_HEADERS lê x-forwarded-for', () => {
     expect(getClientId(new Headers({ 'x-forwarded-for': '1.2.3.4' }), { trustProxyHeaders: true })).toBe('1.2.3.4');
+  });
+});
+
+describe('autenticação por API key', () => {
+  const KEYS: Readonly<Record<string, true>> = { 'chave-valida': true, 'outra-chave': true };
+
+  it('sem chave usa limite por IP', async () => {
+    // max=1 por IP; sem header de chave deve aplicar o limite de IP
+    const { get } = makeHandler({ max: 1, apiKeyMax: 50, validApiKeys: KEYS });
+    expect((await get('exemplo.com')).status).toBe(200);
+    expect((await get('exemplo.com')).status).toBe(429);
+  });
+
+  it('com chave válida usa limite por chave (maior)', async () => {
+    // max=1 por IP, apiKeyMax=3; chamadas com chave não devem atingir o limite de IP
+    const { get } = makeHandler({ max: 1, apiKeyMax: 3, validApiKeys: KEYS });
+    const h = { 'x-api-key': 'chave-valida' };
+    expect((await get('exemplo.com', h)).status).toBe(200);
+    expect((await get('exemplo.com', h)).status).toBe(200);
+    expect((await get('exemplo.com', h)).status).toBe(200);
+    // 4ª requisição esgota o apiKeyMax=3
+    expect((await get('exemplo.com', h)).status).toBe(429);
+  });
+
+  it('cotas de chave e de IP são independentes', async () => {
+    const { get } = makeHandler({ max: 1, apiKeyMax: 5, validApiKeys: KEYS });
+    // Esgota cota de IP
+    await get('exemplo.com');
+    expect((await get('exemplo.com')).status).toBe(429);
+    // Chave ainda tem cota própria
+    const h = { 'x-api-key': 'chave-valida' };
+    expect((await get('exemplo.com', h)).status).toBe(200);
+  });
+
+  it('chaves diferentes têm cotas separadas', async () => {
+    const { get } = makeHandler({ max: 100, apiKeyMax: 1, validApiKeys: KEYS });
+    expect((await get('exemplo.com', { 'x-api-key': 'chave-valida' })).status).toBe(200);
+    // 2ª req com mesma chave esgota
+    expect((await get('exemplo.com', { 'x-api-key': 'chave-valida' })).status).toBe(429);
+    // Outra chave ainda tem cota
+    expect((await get('exemplo.com', { 'x-api-key': 'outra-chave' })).status).toBe(200);
+  });
+
+  it('chave inválida retorna 401 UNAUTHORIZED', async () => {
+    const { get } = makeHandler({ max: 100, apiKeyMax: 100, validApiKeys: KEYS });
+    const res = await get('exemplo.com', { 'x-api-key': 'chave-errada' });
+    expect(res.status).toBe(401);
+    expect(await res.json()).toMatchObject({ code: 'UNAUTHORIZED' });
+  });
+
+  it('chave inválida não consome cota de IP', async () => {
+    const { get } = makeHandler({ max: 1, apiKeyMax: 100, validApiKeys: KEYS });
+    // Chave inválida → 401, não deve incrementar contador de IP
+    await get('exemplo.com', { 'x-api-key': 'chave-errada' });
+    // Requisição sem chave ainda tem cota de IP intacta
+    expect((await get('exemplo.com')).status).toBe(200);
+  });
+
+  it('Authorization: Bearer também é aceito', async () => {
+    const { get } = makeHandler({ max: 100, apiKeyMax: 100, validApiKeys: KEYS });
+    const res = await get('exemplo.com', { authorization: 'Bearer chave-valida' });
+    expect(res.status).toBe(200);
+  });
+
+  it('chave enviada quando feature desabilitada cai para limite por IP', async () => {
+    // validApiKeys ausente → feature desabilitada
+    const { get } = makeHandler({ max: 1 });
+    expect((await get('exemplo.com', { 'x-api-key': 'qualquer-coisa' })).status).toBe(200);
+    expect((await get('exemplo.com', { 'x-api-key': 'qualquer-coisa' })).status).toBe(429);
   });
 });

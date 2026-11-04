@@ -8,6 +8,10 @@ import type { ApiErrorBody } from '@/types/stack';
 export interface StackHandlerDeps {
   analyzer: () => Analyzer;
   rateLimiter: () => RateLimiter;
+  /** Rate limiter para chamadores autenticados (cota maior). */
+  apiKeyRateLimiter?: () => RateLimiter;
+  /** Chaves válidas como lookup table. Ausente ou vazio desabilita a feature. */
+  validApiKeys?: Readonly<Record<string, true>>;
   trustProxyHeaders?: boolean;
 }
 
@@ -15,8 +19,9 @@ export interface StackHandlerDeps {
 export const CORS_HEADERS: Record<string, string> = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type',
-  'Access-Control-Expose-Headers': 'RateLimit-Limit, RateLimit-Remaining, RateLimit-Reset, Retry-After',
+  'Access-Control-Allow-Headers': 'Content-Type, X-Api-Key, Authorization',
+  'Access-Control-Expose-Headers':
+    'RateLimit-Limit, RateLimit-Remaining, RateLimit-Reset, Retry-After',
 };
 
 // Mesmos cabeçalhos do express-rate-limit com `standardHeaders: true`.
@@ -41,16 +46,58 @@ function errorResponse(err: StackflyError, headers: Record<string, string> = {})
 }
 
 /**
+ * Extrai a API key do request:
+ *   X-Api-Key: <key>
+ *   Authorization: Bearer <key>
+ * Retorna `null` se nenhum dos dois estiver presente.
+ */
+function extractApiKey(headers: Headers): string | null {
+  const direct = headers.get('x-api-key');
+  if (direct) return direct.trim();
+
+  const auth = headers.get('authorization');
+  if (auth?.toLowerCase().startsWith('bearer ')) return auth.slice(7).trim();
+
+  return null;
+}
+
+/**
  * Lógica comum de GET /api/v1/stack e POST /api/analyze:
- * rate limit → validação da URL → análise → JSON.
+ * autenticação → rate limit → validação da URL → análise → JSON.
+ *
+ * Com API key válida:  usa apiKeyRateLimiter (cota maior), ID = "key:<key>"
+ * Sem API key (ou key inválida com apiKeyRateLimiter ausente): usa rateLimiter por IP.
+ * Com API key inválida (quando apiKeyRateLimiter está configurado): 401.
  */
 export function createStackHandler(deps: StackHandlerDeps) {
   return async function handle(request: Request, rawUrl: unknown): Promise<Response> {
-    const clientId = getClientId(request.headers, { trustProxyHeaders: deps.trustProxyHeaders });
+    const rawKey = extractApiKey(request.headers);
+    const keyFeatureEnabled =
+      !!deps.apiKeyRateLimiter && !!deps.validApiKeys && Object.keys(deps.validApiKeys).length > 0;
+
+    // Autenticação por chave
+    let useKey = false;
+    if (rawKey !== null) {
+      if (!keyFeatureEnabled) {
+        // Chave enviada mas feature desabilitada → ignora e cai para IP
+      } else if (!(rawKey in deps.validApiKeys!)) {
+        return errorResponse(
+          new StackflyError('UNAUTHORIZED', 'API key inválida.'),
+        );
+      } else {
+        useKey = true;
+      }
+    }
+
+    // Rate limit: por chave ou por IP
+    const limiter = useKey ? deps.apiKeyRateLimiter!() : deps.rateLimiter();
+    const rateLimitId = useKey
+      ? `key:${rawKey}`
+      : getClientId(request.headers, { trustProxyHeaders: deps.trustProxyHeaders });
 
     let rl: RateLimitResult;
     try {
-      rl = await deps.rateLimiter().check(clientId);
+      rl = await limiter.check(rateLimitId);
     } catch (err) {
       console.error('[stackfly] rate limit indisponível:', err);
       return errorResponse(new StackflyError('INTERNAL_ERROR', 'Erro interno. Tente novamente.'));

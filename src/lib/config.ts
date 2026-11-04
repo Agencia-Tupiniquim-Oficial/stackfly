@@ -18,6 +18,15 @@ export const config = {
   rateLimitWindowMs: intFromEnv('RATE_LIMIT_WINDOW_MS', 60 * 1000), // 1min
   // API pública e aberta: limite conservador por IP, já que qualquer um pode chamar.
   rateLimitMax: intFromEnv('RATE_LIMIT_MAX', 10),
+  // Chamadores autenticados com API key recebem cota separada, maior.
+  // RATE_LIMIT_MAX_WITH_KEY=0 desabilita a feature (nenhuma chave aceita).
+  apiKeyRateLimitMax: intFromEnv('RATE_LIMIT_MAX_WITH_KEY', 120, { min: 0 }),
+  // Chaves válidas, separadas por vírgula. Whitespace ao redor é ignorado.
+  // Ex.: STACKFLY_API_KEYS=chave-a,chave-b
+  apiKeys: (process.env.STACKFLY_API_KEYS ?? '')
+    .split(',')
+    .map((k) => k.trim())
+    .filter(Boolean),
   navigationTimeoutMs: intFromEnv('ANALYSIS_NAVIGATION_TIMEOUT_MS', 25_000),
   // Depois do DOMContentLoaded, espera a rede "acalmar" por no máximo esse tempo.
   settleTimeoutMs: intFromEnv('ANALYSIS_SETTLE_TIMEOUT_MS', 5_000, { min: 0 }),
