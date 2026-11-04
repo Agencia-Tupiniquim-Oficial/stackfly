@@ -60,6 +60,25 @@ O esquema é opcional (`exemplo.com.br` vira `https://exemplo.com.br`). Só
 `implied: true` indica uma tecnologia inferida a partir de outra (ex.:
 WordPress → PHP e MySQL), não detectada diretamente.
 
+### Cabeçalhos de resposta
+
+Todas as respostas (200 e erros) incluem:
+
+| Cabeçalho | Exemplo | Descrição |
+|---|---|---|
+| `RateLimit-Limit` | `10` | Cota total da janela atual |
+| `RateLimit-Remaining` | `7` | Requisições restantes na janela |
+| `RateLimit-Reset` | `42` | Segundos até a janela reiniciar |
+
+Quando o limite é atingido (429), a resposta acrescenta:
+
+| Cabeçalho | Exemplo | Descrição |
+|---|---|---|
+| `Retry-After` | `42` | Segundos para aguardar antes de tentar novamente |
+
+Use `Retry-After` para implementar backoff no chamador — nunca tente
+novamente sem aguardar esse intervalo.
+
 ### Erros
 
 Todos os erros vêm em JSON com uma mensagem e um código estável:
@@ -147,11 +166,105 @@ a outra.
   compartilham a mesma entrada. Falhas não são cacheadas.
 - **Tempo:** cada análise tem um prazo de ~45s. Sites que não carregam nesse
   tempo retornam `504`.
-- **CORS:** liberado pra qualquer origem — a API foi pensada pra ser
-  chamada tanto do navegador quanto de servidores externos.
+- **CORS:** liberado para qualquer origem. Os cabeçalhos `X-Api-Key` e
+  `Authorization` estão incluídos em `Access-Control-Allow-Headers`, então a
+  autenticação por chave funciona diretamente de chamadas no navegador
+  (fetch/XHR cross-origin).
 
 ## Rota legada
 
 `POST /api/analyze` com corpo `{ "url": "..." }` continua funcionando (era a
 rota usada pela interface antiga) e devolve o mesmo JSON. Ela passa pelo mesmo
-rate limit e pelas mesmas validações. Prefira `GET /api/v1/stack`.
+rate limit, pelas mesmas validações e aceita os mesmos headers de autenticação
+(`X-Api-Key` / `Authorization: Bearer`). Prefira `GET /api/v1/stack`.
+
+## Boas práticas para chamadores
+
+### Tratar 429 explicitamente
+
+Nunca ignore o status 429 — a resposta é JSON com `code: "RATE_LIMITED"` e o
+cabeçalho `Retry-After` indica exatamente quantos segundos esperar:
+
+```ts
+async function analyzeStack(url: string): Promise<StackResult> {
+  const res = await fetch(
+    `https://stackfly.suaempresa.com.br/api/v1/stack?url=${encodeURIComponent(url)}`,
+    { headers: { 'X-Api-Key': process.env.STACKFLY_API_KEY! } },
+  );
+
+  if (res.status === 429) {
+    const retryAfter = Number(res.headers.get('Retry-After') ?? 60);
+    throw new Error(`Rate limit atingido. Tente novamente em ${retryAfter}s.`);
+  }
+  if (res.status === 401) {
+    throw new Error('API key inválida.');
+  }
+  if (!res.ok) {
+    const body = await res.json();
+    throw new Error(`Erro ${res.status}: ${body.code}`);
+  }
+
+  return res.json();
+}
+```
+
+### Cache no lado do chamador
+
+O Stackfly já faz cache de resultados por 1h, mas adicionar cache local evita
+requisições desnecessárias — útil em ambientes com IPs compartilhados ou cota
+limitada:
+
+```ts
+const cache = new Map<string, { result: StackResult; expiresAt: number }>();
+
+async function analyzeStackCached(url: string): Promise<StackResult> {
+  const hit = cache.get(url);
+  if (hit && Date.now() < hit.expiresAt) return hit.result;
+
+  const result = await analyzeStack(url);
+  cache.set(url, { result, expiresAt: Date.now() + 60 * 60 * 1000 }); // 1h
+  return result;
+}
+```
+
+> Em produção, prefira Redis/KV a um `Map` em memória — ele some a cada restart.
+
+### Controlar a taxa de saída
+
+Se sua aplicação dispara muitas análises em paralelo, limite a taxa de envio
+para evitar atingir o teto antes do necessário:
+
+```ts
+// Enfileira as chamadas; libera no máximo `rate` por `windowMs`
+class TokenBucket {
+  private tokens: number;
+  private lastRefill = Date.now();
+
+  constructor(
+    private rate: number,    // ex.: 100 (margem abaixo de 120)
+    private windowMs: number // ex.: 60_000
+  ) {
+    this.tokens = rate;
+  }
+
+  async consume(): Promise<void> {
+    const now = Date.now();
+    const elapsed = now - this.lastRefill;
+    if (elapsed >= this.windowMs) {
+      this.tokens = this.rate;
+      this.lastRefill = now;
+    }
+    if (this.tokens > 0) { this.tokens--; return; }
+    await new Promise<void>((r) => setTimeout(r, this.windowMs - elapsed));
+    this.tokens = this.rate - 1;
+    this.lastRefill = Date.now();
+  }
+}
+
+const bucket = new TokenBucket(100, 60_000);
+
+async function analyzeStackThrottled(url: string): Promise<StackResult> {
+  await bucket.consume();
+  return analyzeStackCached(url);
+}
+```
