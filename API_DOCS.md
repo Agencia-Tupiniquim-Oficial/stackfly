@@ -1,7 +1,7 @@
 # API pública Stackfly — v1
 
 Endpoint aberto pra qualquer aplicação consultar a stack de tecnologia de um
-site. Sem cadastro, sem chave de API.
+site. Sem cadastro. Chave de API opcional para cotas maiores (veja [Autenticação](#autenticação)).
 
 ## Endpoint
 
@@ -73,6 +73,7 @@ Todos os erros vêm em JSON com uma mensagem e um código estável:
 | 400 | `MISSING_URL` | `url` ausente ou vazia |
 | 400 | `INVALID_URL` | URL malformada, longa demais ou com usuário/senha |
 | 400 | `UNSUPPORTED_PROTOCOL` | Esquema diferente de `http`/`https` |
+| 401 | `UNAUTHORIZED` | API key enviada mas inválida |
 | 403 | `BLOCKED_TARGET` | Destino não público (localhost, rede privada, metadados de nuvem, porta não permitida) — inclusive se o site redirecionar para um destino assim |
 | 429 | `RATE_LIMITED` | Limite de requisições excedido (veja `Retry-After`) |
 | 500 | `INTERNAL_ERROR` | Erro interno |
@@ -86,12 +87,61 @@ Uma falha nunca devolve um resultado "vazio" com status 200.
 
 > Portas aceitas: 80, 443, 8080 e 8443.
 
+## Autenticação
+
+Por padrão a API é aberta e limita por IP (10 req/min). Aplicações que
+precisam de cota maior — como backends rodando em Edge Functions com IPs
+compartilhados — podem usar uma **API key** para receber uma cota separada
+(padrão 120 req/min), independente do limite público.
+
+### Como obter uma chave
+
+Fale com o time Stackfly. Uma chave é uma string aleatória de 32 bytes hex
+(gerada com `openssl rand -hex 32`). Ela é configurada pelo operador da
+instância via variável de ambiente `STACKFLY_API_KEYS`.
+
+### Como enviar a chave
+
+Duas formas equivalentes, escolha uma:
+
+```bash
+# Opção 1 — header dedicado
+curl "https://stackfly.suaempresa.com.br/api/v1/stack?url=exemplo.com" \
+  -H "X-Api-Key: SUA_CHAVE"
+
+# Opção 2 — Bearer token
+curl "https://stackfly.suaempresa.com.br/api/v1/stack?url=exemplo.com" \
+  -H "Authorization: Bearer SUA_CHAVE"
+```
+
+```ts
+// TypeScript / fetch
+const res = await fetch(
+  `https://stackfly.suaempresa.com.br/api/v1/stack?url=${encodeURIComponent(url)}`,
+  { headers: { 'X-Api-Key': process.env.STACKFLY_API_KEY! } },
+);
+```
+
+### Comportamento
+
+| Situação | Rate limit aplicado | ID da cota |
+|---|---|---|
+| Sem header de chave | 10 req/min por IP | IP do chamador |
+| Chave válida | 120 req/min (configurável) | A própria chave |
+| Chave inválida | — | retorna `401 UNAUTHORIZED` |
+| Feature desabilitada na instância | Ignora o header, usa limite por IP | IP do chamador |
+
+Cotas de chave e de IP são **completamente independentes** — uma não consome
+a outra.
+
 ## Limites
 
-- **Rate limit:** 10 requisições/minuto por IP, janela fixa (configurável via
-  `RATE_LIMIT_MAX` e `RATE_LIMIT_WINDOW_MS`). Todas as respostas trazem
-  `RateLimit-Limit`, `RateLimit-Remaining` e `RateLimit-Reset`; o 429 traz
-  também `Retry-After` (segundos). Requisições inválidas também contam.
+- **Rate limit:** duas faixas de cota, janela fixa de 1 minuto:
+  - **Sem autenticação:** 10 req/min por IP (configurável via `RATE_LIMIT_MAX`).
+  - **Com API key válida:** 120 req/min por chave (configurável via `RATE_LIMIT_MAX_WITH_KEY`).
+  - Todas as respostas trazem `RateLimit-Limit`, `RateLimit-Remaining` e
+    `RateLimit-Reset`; o 429 traz também `Retry-After` (segundos). Requisições
+    inválidas também contam.
 - **Cache:** resultados ficam em cache por 1h por URL (configurável via
   `CACHE_TTL_MS`). URLs equivalentes (`exemplo.com`, `https://EXEMPLO.com/`)
   compartilham a mesma entrada. Falhas não são cacheadas.

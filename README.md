@@ -85,7 +85,9 @@ Nenhuma é obrigatória para rodar localmente. Copie `.env.example` para
 |---|---|---|
 | `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN` (ou `KV_REST_API_URL` / `KV_REST_API_TOKEN`) | — | Cache e rate limit compartilhados entre instâncias. **Recomendado em produção.** |
 | `CACHE_TTL_MS` | `3600000` | Tempo de cache por URL |
-| `RATE_LIMIT_MAX` / `RATE_LIMIT_WINDOW_MS` | `10` / `60000` | Rate limit por IP |
+| `RATE_LIMIT_MAX` / `RATE_LIMIT_WINDOW_MS` | `10` / `60000` | Rate limit por IP (público) |
+| `STACKFLY_API_KEYS` | — | Chaves de API aceitas (vírgula). Habilita cota por chave |
+| `RATE_LIMIT_MAX_WITH_KEY` | `120` | Rate limit por chave autenticada |
 | `ANALYSIS_TOTAL_TIMEOUT_MS` | `45000` | Prazo total de uma análise |
 
 Lista completa e comentada em [`.env.example`](./.env.example). Nenhuma
@@ -168,9 +170,12 @@ npm run build
   prazo da análise detecta isso, mata o processo e o próximo pedido relança
   o Chromium. Por causa do processo único, cada instância faz uma análise
   por vez; picos de tráfego dependem de a Vercel abrir mais instâncias.
-- **Rate limit:** janela fixa por IP (como antes). IPv6 é agrupado por /64.
-  Sem Redis, cada instância conta separado. Para abuso em larga escala,
-  combine com as regras de rate limit do **Vercel Firewall**.
+- **Rate limit:** duas faixas, janela fixa de 1 minuto. Sem autenticação: 10
+  req/min por IP. Com API key válida: 120 req/min por chave (separado do
+  limite público). IPv6 é agrupado por /64. Sem Redis, cada instância conta
+  separado. Para abuso em larga escala, combine com as regras de rate limit
+  do **Vercel Firewall**. Veja [`API_DOCS.md`](./API_DOCS.md#autenticação)
+  para detalhes de autenticação.
 - **Deduplicação** de análises simultâneas para a mesma URL vale só dentro
   de uma instância.
 - **Detecção:** o matcher usa 6 canais (headers, meta, cookies, JS, HTML,
